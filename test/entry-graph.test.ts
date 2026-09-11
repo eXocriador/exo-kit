@@ -33,9 +33,16 @@ function bareSpecifiers(entry: string): Set<string> {
     // `import ... from '@exo/kit/connector-sdk'` line a product writes.
     const source = readFileSync(file, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
+      .replace(/^\s*\/\/.*$/gm, '')
+      // Type-only statements are erased at build, so a bundler never follows
+      // them. Both spellings have to go: the lookbehind below catches
+      // `import type X from 'p'`, but not `import type { X } from 'p'`, which
+      // is the form every one of these files actually uses — `auth-core` types
+      // a query runner with `Sql` and would otherwise have claimed to import a
+      // database driver it never touches at runtime.
+      .replace(/\b(?:import|export)\s+type\s+[^;]*?from\s+'[^']*'/g, '');
     // `from '...'` covers both `import` and `export ... from`, which is what
-    // a bundler follows. Type-only imports are erased, so they are skipped.
+    // a bundler follows.
     for (const m of source.matchAll(/(?<!\btype\s)\bfrom\s+'([^']+)'/g)) {
       const spec = m[1];
       if (!spec) continue;
@@ -74,6 +81,43 @@ describe('subpath entries and what they import', () => {
     const specs = bareSpecifiers('llm/index.ts');
     expect(specs.has('postgres')).toBe(false);
     expect(specs.has('ioredis')).toBe(false);
+  });
+
+  it('@exo/kit/http is server-side all the way down, and says which builtins', () => {
+    // Every module behind this entry is server-side by construction — an ETag
+    // over node:crypto, a guard that resolves hostnames — so unlike `infra`
+    // there is no client-safe half to move out. What matters is that the list
+    // stays this short: a web framework or a database driver appearing here
+    // would mean the response helpers had acquired a dependency the error
+    // sanitiser has no use for.
+    expect([...bareSpecifiers('http/index.ts')].sort()).toEqual([
+      'node:crypto',
+      'node:dns/promises',
+      'node:net',
+    ]);
+  });
+
+  it('@exo/kit/auth-core needs node:crypto and no driver', () => {
+    // The Postgres types it uses are type-only imports, erased at build — so a
+    // product that mounts the session store needs the driver, and one that only
+    // hashes a password does not.
+    expect([...bareSpecifiers('auth-core/index.ts')].sort()).toEqual(['node:crypto']);
+  });
+
+  it('@exo/kit/auth-core/cookie reaches nothing at all — an edge proxy imports it', () => {
+    // This is the same promise `@exo/kit/json` makes, for the same reason and a
+    // sharper one: an edge runtime has no `node:crypto`, so a barrel that
+    // re-exported the cookie alongside scrypt would not merely bloat a bundle,
+    // it would fail to build. The cookie uses Web Crypto precisely so this row
+    // can be empty.
+    expect([...bareSpecifiers('auth-core/cookie.ts')]).toEqual([]);
+  });
+
+  it('the auth-core barrel does not re-export the cookie half', () => {
+    // Belt and braces: the row above stays empty only while nothing pulls the
+    // node half in behind it, and one convenient re-export would do it.
+    const barrel = readFileSync(resolve(SRC, 'auth-core/index.ts'), 'utf8');
+    expect(barrel).not.toMatch(/from '\.\/cookie\.js'/);
   });
 
   it('@exo/kit/infra is the one entry that pulls both drivers', () => {

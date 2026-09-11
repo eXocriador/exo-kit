@@ -2,7 +2,8 @@
 
 Shared mechanism for a handful of small self-hosted services: database and
 cache accessors, structured logging with an audit trail, a multi-provider LLM
-client, and the SDK a product mounts to be supportable.
+client, JSON responses and request pacing, the primitives behind session auth,
+and the SDK a product mounts to be supportable.
 
 One npm package with subpath exports, one git tag for the whole kit, and one
 rule that shapes every module in it:
@@ -20,7 +21,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.2.0
+npm i github:eXocriador/exo-kit#v0.3.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -36,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.2.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.3.0#subdirectory=python"
 ```
 
 ## Modules
@@ -47,6 +48,9 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.2.0#subdirectory=python"
 | `@exo/kit/json` | `isRecord`, `asArray`, `asString`, `asNumber`, `asBoolean`, `get`, `getPath` | nothing |
 | `@exo/kit/log` | `createLogger` — pino + an audit trail, optional log shipping | `pino` |
 | `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway | nothing |
+| `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
+| `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
+| `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
 | `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
 Peer dependencies (`postgres`, `ioredis`, `pino`) are optional, and the right
@@ -57,6 +61,13 @@ re-exported from `infra` as well, and that is compatibility, not an invitation:
 a driver that reaches a browser bundle is a build failure (`Can't resolve
 'net'`), not a size regression, and the first thing that says so is the
 bundler. `test/entry-graph.test.ts` pins each row of that column.
+
+`@exo/kit/auth-core/cookie` is the same split made a second time, and for a
+sharper reason. An edge proxy verifies a session cookie's signature and has no
+`node:crypto` at all, so a barrel that re-exported the cookie next to scrypt and
+TOTP would not bloat a bundle — it would fail to build. The cookie half uses Web
+Crypto and imports nothing; the barrel does not re-export it, and a test says so
+out loud rather than a comment asking nicely.
 
 ## Using it
 
@@ -98,9 +109,39 @@ export const { sql: db, query: dbQuery, tryQuery: dbTry, jsonb } = createDb({
 });
 ```
 
+```ts
+// src/lib/auth/sessions.ts
+import { createSessionStore } from '@exo/kit/auth-core';
+import { dbQuery } from '@/lib/infra/db';
+import { cacheGet, cacheSet, cacheDel } from '@/lib/infra/redis';
+
+export interface Principal { sessionId: string; userId: string; role: string }
+
+export const {
+  createSession, resolveSession, revokeSession, revokeUserSessions,
+  revokeOwnedSession, revokeOtherSessions, listUserSessions, invalidateUserCache,
+} = createSessionStore<Principal>({
+  query: dbQuery,
+  cache: { cacheGet, cacheSet, cacheDel },
+  // This app's idea of who a caller is, and the one query that decides it.
+  // The expiry predicate lives here: the kit does not re-check it, because
+  // this runs once per gated request and splitting it would cost a round trip.
+  resolvePrincipal: async (sql, sessionId) => {
+    const rows = await sql`
+      SELECT s.id AS session_id, u.id::text AS user_id, u.role, u.status
+      FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.id = ${sessionId} AND s.expires_at > NOW()
+      LIMIT 1`;
+    const row = rows[0];
+    if (!row || row.status !== 'active') return null;
+    return { sessionId: row.session_id, userId: row.user_id, role: row.role };
+  },
+});
+```
+
 Destructuring is the point: the returned functions are bound to that instance,
-so existing flat call sites (`dbQuery(...)`, `logWarn(...)`) keep working and
-the diff is one file instead of every file.
+so existing flat call sites (`dbQuery(...)`, `logWarn(...)`, `resolveSession(id)`)
+keep working and the diff is one file instead of every file.
 
 ### Not configured is a state
 
@@ -145,9 +186,15 @@ npm run scan      # gitleaks over the working tree
 
 Every module has tests, and they are meant to be able to fail: the suite covers
 the not-configured branches, the circuit breaker closing again after its
-cooldown, the replay window rejecting both a stale and a future timestamp, and
-the connector answering 503 rather than serving an unsigned request. A test
-that cannot fail proves nothing about the code it names.
+cooldown, the replay window rejecting both a stale and a future timestamp, the
+connector answering 503 rather than serving an unsigned request, a rate limit
+that refuses at the ceiling **and lets the caller through once the window has
+slid past**, and a revocation whose row dies before its cache key. A test that
+cannot fail proves nothing about the code it names — three of these were written
+first and found something: an empty stored password hash that verified every
+password, a proxy hop count of zero that made one rate-limit bucket for the
+whole internet, and an entry-graph walker that could not see a braced type
+import.
 
 ## Releasing
 

@@ -3,6 +3,100 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.3.0 — 2026-09-11
+
+Two new modules, and both arrived the same way: the mechanism was identical to
+the character in two products, and everything they had drifted on turned out to
+be a decision one of them was entitled to make and the kit is not.
+
+### http (new subpath)
+
+New: `@exo/kit/http` — `createApiResponse`, `createRateLimiter`,
+`createClientIp`, and the SSRF guard (`validateHost`, `safeFetch`, `parseIPv4`,
+`isReservedIPv4`).
+
+`createApiResponse({ isProd })` gives `apiOk` / `apiError` / `safeErrorDetail`:
+the cache-header matrix, a weak ETag and the `If-None-Match` → 304 path, plus
+the one place a caught exception is turned into text a client may read.
+`isProd` is an argument because the kit does not read `NODE_ENV`, and because a
+default for it would be wrong in one direction or the other — leaking internal
+detail, or hiding it from the developer debugging locally.
+
+`apiOk` and `apiError` return `Response`, not `NextResponse`. Nothing was using
+what the subclass adds (no caller reads `.cookies` off a response these build),
+`NextResponse` **is** a `Response`, and the alternative was making a web
+framework a dependency of an error sanitiser.
+
+`createRateLimiter({ redis, policies, failClosed })` is the sliding window over
+a Redis sorted set with the in-process window behind it, **and nothing else**.
+The two copies had drifted by 223 lines and every one of them was in the route
+table: one product paces ~100 routes, the other eleven, and one of them
+deliberately has no registration bucket because a limit on a route that must not
+exist reads as permission for it. So the table is an argument, the key type is
+inferred from it, and a key with no rule throws rather than quietly allowing the
+request. The in-process buckets live per limiter rather than in module scope.
+
+`createClientIp({ trustedProxyHops })` reads the caller's address from
+`x-forwarded-for` counting from the RIGHT, so prepended entries cannot buy a
+caller a fresh rate-limit bucket. **Fixed on the way in:** with a hop count of
+zero the copies indexed one past the end of the chain and returned `undefined`
+typed as `string`, which would have made the rate-limit bucket key the literal
+`"undefined"`, shared by every caller. The index is clamped into the chain now.
+
+### auth-core (new subpath, plus a second narrow entry)
+
+New: `@exo/kit/auth-core` — scrypt passwords, TOTP, single-use tokens and the
+session store. And `@exo/kit/auth-core/cookie`, which is a separate entry on
+purpose: it imports **nothing at all** and uses Web Crypto, because an edge
+proxy verifies a session cookie's signature and would not build if that import
+dragged `node:crypto` in behind it. The barrel deliberately does not re-export
+it, and `test/entry-graph.test.ts` holds both halves to their word.
+
+`hashPassword` / `verifyPassword` / `passwordLengthError` are unchanged in
+behaviour but for one refusal. **Fixed on the way in:** a stored record of the
+form `scrypt$16384$8$1$$` — correctly shaped, every field parsing, salt and
+hash both empty — asked scrypt for a zero-length key and compared it, equal,
+against a zero-length expected value. Every password verified against such a
+row. A truncated column or a half-written import was enough. Both copies had it;
+nothing could see it, because the format check passed and the login simply
+succeeded.
+
+`totpUri(secret, email, issuer)` takes the issuer as a required argument. It is
+the name a person reads in their authenticator app, so it belongs to the
+product — and a default is precisely the value that survives a copy and is then
+read as fact.
+
+`createAuthTokens({ query })` mints, peeks and consumes single-use links —
+storing only the SHA-256, consuming in one atomic statement, and rolling a
+follow-up write back together with the consume. The purpose union is a type
+parameter and there are no lifetime constants: those name which flows an
+application has, and the two copies being byte-identical was itself the
+evidence, since one of them carried a support-link purpose and its lifetime for
+a flow it does not have.
+
+`createSessionStore({ query, cache, resolvePrincipal })` holds the key scheme,
+the two lifetimes, the cache-around-resolve, the listing, and the revocation
+ordering — the row dies before the cache key, which is what makes "signed out
+everywhere" true immediately rather than in a minute. **The principal resolver
+is an argument**, because that is the one thing the copies genuinely disagreed
+about: one resolves a subscription plan and a permission set unioned from a
+grants table, the other an account status and nothing else. That is an
+authorization model, not a spelling. The resolver owns the liveness predicate;
+the doc block says so and both products pin it.
+
+`createSessionCookie({ cookieName, secret })` signs and verifies
+`<sessionId>.<hmac>`. Both arguments are required and undefaulted: one of the
+copies was, for a while, issuing a cookie named for the other product, because
+the file had arrived by copying and a cookie name is a claim about provenance
+that no test can see.
+
+### test/entry-graph
+
+Fixed: the walker skipped `import type X from 'p'` but counted
+`import type { X } from 'p'` — the form every one of these files actually uses.
+`auth-core` types a query runner with `Sql` and would have been recorded as
+importing a database driver it never touches at runtime.
+
 ## v0.2.0 — 2026-09-11
 
 ### json (new subpath)

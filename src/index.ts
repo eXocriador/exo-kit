@@ -2,7 +2,8 @@
  * `@exo/kit` — shared mechanism for small self-hosted services.
  *
  * Prefer the subpath entries (`@exo/kit/infra`, `@exo/kit/json`,
- * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/connector-sdk`): importing a
+ * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/http`, `@exo/kit/auth-core`,
+ * `@exo/kit/auth-core/cookie`, `@exo/kit/connector-sdk`): importing a
  * subpath pulls in only that module's peer dependencies, so a product that
  * wants a logger does not need a Postgres driver on disk. `test/entry-graph`
  * pins that, because it is a claim a bundler checks and nothing else does.
@@ -13,4 +14,26 @@ export type { Db, DbConfig, DbOutcome, RedisCache, RedisConfig, ErrorContext, Re
 export type { JsonRecord } from './json/index.js';
 export type { KitLogger, LoggerConfig, OpenObserveConfig, AuditRecord, LogFields } from './log/index.js';
 export type { Llm, LlmConfig, ChatMessage, ChatProvider, GenerateOptions, ProviderName } from './llm/index.js';
+export type {
+  ApiResponse,
+  ApiResponseConfig,
+  ApiOkOptions,
+  RateLimiter,
+  RateLimiterConfig,
+  RateLimitRule,
+  RateLimitRedis,
+  ClientIp,
+  ClientIpConfig,
+  ValidationResult,
+} from './http/index.js';
+export type {
+  AuthTokens,
+  AuthTokensConfig,
+  SessionStore,
+  SessionStoreConfig,
+  SessionCache,
+  SessionInfo,
+  SessionMeta,
+} from './auth-core/index.js';
+export type { SessionCookie, SessionCookieConfig } from './auth-core/cookie.js';
 export type { ConnectorHandlerOptions } from './connector-sdk/index.js';
