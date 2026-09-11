@@ -1,4 +1,4 @@
-import { asArray, asString, getPath } from '../../infra/json.js';
+import { asArray, asString, getPath } from '../../json/index.js';
 export function createOllamaProvider(config) {
     const base = config.url ?? 'http://localhost:11434';
     const doFetch = config.fetchImpl ?? ((...a) => globalThis.fetch(...a));

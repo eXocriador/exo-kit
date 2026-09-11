@@ -3,6 +3,37 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.2.0 — 2026-09-11
+
+### json (new subpath)
+
+New: `@exo/kit/json`. The same seven helpers (`isRecord`, `asArray`,
+`asString`, `asNumber`, `asBoolean`, `get`, `getPath`), now reachable from an
+entry that imports nothing at all. They are still re-exported from
+`@exo/kit/infra`, so nothing needs changing — but new code should take them
+from here.
+
+**Why it exists.** `@exo/kit/infra` is a barrel over a pool, a cache and these
+helpers, and the first two import `postgres` and `ioredis`. A bundler
+resolving the barrel therefore walks into both drivers no matter which export
+was wanted. exointel replaced its own `lib/json.ts` with `@exo/kit/infra`,
+watched 2499 tests and `tsc --noEmit` stay green, and then had `next build`
+fail with `Can't resolve 'net'`: a module reachable from a client component now
+dragged a Postgres driver into the browser bundle. That is a broken build, not
+a size regression, and nothing before the bundler mentions it.
+
+`test/entry-graph.test.ts` now pins what each subpath can reach — `json`
+nothing, `log` only pino, `connector-sdk` only `node:crypto`, `llm` no database
+driver, `infra` both and by design. It walks the relative imports from each
+entry and collects the bare specifiers, so a stray import anywhere under an
+entry fails it.
+
+### llm
+
+Fixed: the providers took the JSON helpers through `../../infra/json.js`, which
+was harmless, and now take them from `../../json/index.js`, which the test
+above makes permanent. No API change.
+
 ## v0.1.0 — 2026-09-11
 
 First release. Four modules, each a factory with an explicit config.

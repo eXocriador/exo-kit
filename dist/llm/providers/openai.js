@@ -1,4 +1,4 @@
-import { asString, getPath } from '../../infra/json.js';
+import { asString, getPath } from '../../json/index.js';
 export function createOpenAiProvider(config) {
     const base = config.baseUrl ?? 'https://api.openai.com';
     const doFetch = config.fetchImpl ?? ((...a) => globalThis.fetch(...a));

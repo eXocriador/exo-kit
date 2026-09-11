@@ -35,4 +35,4 @@ export declare function get(obj: unknown, key: string): unknown;
  * field read through such a walker reads as absent.
  */
 export declare function getPath(obj: unknown, path: string): unknown;
-//# sourceMappingURL=json.d.ts.map
+//# sourceMappingURL=index.d.ts.map

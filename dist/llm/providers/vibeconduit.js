@@ -1,4 +1,4 @@
-import { asString, getPath } from '../../infra/json.js';
+import { asString, getPath } from '../../json/index.js';
 /**
  * OpenAI-compatible chat client for a self-hosted gateway (the "gateway"
  * provider). Same wire format as OpenAI; separate provider because its

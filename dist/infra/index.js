@@ -9,8 +9,17 @@
  *      working accessor whose every call takes the unavailable branch, so a
  *      product can run without a database or a cache and find out by checking,
  *      not by crashing.
+ *
+ * ── Importing this pulls in the drivers ──
+ * This entry is a barrel over three things, and two of them import `postgres`
+ * and `ioredis`. A bundler resolving `@exo/kit/infra` therefore walks into
+ * both drivers even when the only thing wanted is an untrusted-JSON helper —
+ * and a driver that reaches a browser bundle is a build failure (`Can't
+ * resolve 'net'`), not a size regression. The JSON helpers are re-exported
+ * here for the products that already import them from this path; everything
+ * new should take them from `@exo/kit/json`, which imports nothing at all.
  */
 export { createDb } from './db.js';
 export { createRedis } from './redis.js';
-export { isRecord, asArray, asString, asNumber, asBoolean, get, getPath, } from './json.js';
+export { isRecord, asArray, asString, asNumber, asBoolean, get, getPath, } from '../json/index.js';
 //# sourceMappingURL=index.js.map

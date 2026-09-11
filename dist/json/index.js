@@ -61,4 +61,4 @@ export function getPath(obj, path) {
     }
     return cur;
 }
-//# sourceMappingURL=json.js.map
+//# sourceMappingURL=index.js.map

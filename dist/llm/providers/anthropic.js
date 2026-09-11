@@ -1,4 +1,4 @@
-import { asArray, asString, isRecord } from '../../infra/json.js';
+import { asArray, asString, isRecord } from '../../json/index.js';
 export function createAnthropicProvider(config) {
     const base = config.baseUrl ?? 'https://api.anthropic.com';
     const doFetch = config.fetchImpl ?? ((...a) => globalThis.fetch(...a));
