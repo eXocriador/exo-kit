@@ -54,9 +54,15 @@
     "postgres": ">=3.4"
   },
   "peerDependenciesMeta": {
-    "ioredis": { "optional": true },
-    "pino": { "optional": true },
-    "postgres": { "optional": true }
+    "ioredis": {
+      "optional": true
+    },
+    "pino": {
+      "optional": true
+    },
+    "postgres": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
