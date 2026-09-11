@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Скан на секрети перед кожним комітом. Репозиторій ПУБЛІЧНИЙ: секрет,
+# який сюди потрапив, вважається засвіченим у ту ж секунду — видалення
+# наступним комітом його не повертає.
+#
+# Увімкнути в клоні:  git config core.hooksPath .githooks
+set -euo pipefail
+
+GITLEAKS="${GITLEAKS:-$(command -v gitleaks || echo /srv/shared/bin/gitleaks)}"
+
+if [ ! -x "$GITLEAKS" ]; then
+  echo "pre-commit: gitleaks не знайдено ($GITLEAKS)." >&2
+  echo "Постав його (/srv/shared/scripts/install-gitleaks.sh) або вкажи GITLEAKS=." >&2
+  echo "Коміт зупинено: скан, якого не було, нічого не доводить." >&2
+  exit 1
+fi
+
+echo "pre-commit: gitleaks protect --staged"
+"$GITLEAKS" protect --staged --redact --no-banner --config .gitleaks.toml

@@ -1,0 +1,21 @@
+node_modules/
+*.log
+.DS_Store
+
+# Секретів у цьому репозиторії не буває взагалі — див. README, «Три умови».
+# Рядки нижче не дозволяють винятку, вони прибирають випадковість.
+.env
+*.env
+!*.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+dist/*.whl
+
+# dist/ КОМІТИТЬСЯ: споживач ставить цей репозиторій як git-залежність, і
+# `npm ci` у Docker не має компілювати TypeScript. Збирає scripts/release.sh.
+!dist/
