@@ -120,6 +120,19 @@ describe('subpath entries and what they import', () => {
     expect(barrel).not.toMatch(/from '\.\/cookie\.js'/);
   });
 
+  it('@exo/kit/mailer reaches no package at all', () => {
+    // One HTTPS call with the global `fetch`. A product that only wants to
+    // know whether email is configured should not pay for anything else, and
+    // an edge-adjacent caller of `isOwnSender` must not drag Node in.
+    expect([...bareSpecifiers('mailer/index.ts')]).toEqual([]);
+  });
+
+  it('@exo/kit/notify reaches no package at all', () => {
+    // Same shape: the Telegram leg is a `fetch`, the email leg is a function
+    // the product hands in. The mailer it composes with is a type import only.
+    expect([...bareSpecifiers('notify/index.ts')]).toEqual([]);
+  });
+
   it('@exo/kit/infra is the one entry that pulls both drivers', () => {
     // Stated, not lamented: this entry exists to hand out a pool and a cache.
     // The test is here so the line stays true in both directions — an entry

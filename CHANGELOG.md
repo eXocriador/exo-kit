@@ -3,6 +3,77 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.4.0 — 2026-09-11
+
+Two new modules from the support side of two products, and one widened type.
+The mailer copies differed by fifteen lines, all of them empty. The notify
+copies differed by forty-eight, and the difference was a bug in one of them.
+
+### mailer (new subpath)
+
+New: `@exo/kit/mailer` — `createMailer({ apiKey, from, reportError })` over the
+Resend HTTPS API, plus two pure helpers, `senderAddress` and `isOwnSender`. It
+imports nothing; the entry-graph test holds the row empty.
+
+The factory hands back two ways to send, because two products disagree on what
+a failure is. `sendEmail` is best-effort: any failure is `false`, reported once
+through `reportError` (`mailer.send_failed`, with the provider status and the
+subject, never the recipient), and never thrown — a request must not fail over
+a mail hiccup. `send` is strict: it throws a `MailSendError` carrying `status`
+and a `reason` (`not_configured` / `refused` / `transport`), for the caller who
+logs it itself and answers the user the same way regardless. Both share one
+request. `mailerEnabled()` is the gate a product puts in front of the flows that
+only make sense with email.
+
+`isOwnSender(from, email)` is the guard two products had written in their
+notify module and needed in front of every inbound message: a support inbox
+that is also the escalation target receives its own escalation notice as a new
+customer conversation, and an AI answers it — observed twice in production
+before the guard existed. It matches one address exactly, never a domain, and
+is `false` when either side is missing, because the dangerous failure here is
+the one that drops a real customer. It lives in `mailer` because the address in
+question is the mailer's `from`.
+
+### notify (new subpath)
+
+New: `@exo/kit/notify` — `createTelegramDm({ botToken, chatId })` and
+`createEscalationNotifier({ telegram, sendEmail })`. Imports nothing; the
+mailer it composes with is a type.
+
+`notifyEscalation` sends Telegram first and email only when Telegram did not go
+out — unconfigured or failed — and never throws, because it runs inside the
+webhook that raised the escalation. The notice text is unchanged from the
+copies: headline, optional reason, link, with a `[shadow] ` prefix when the
+customer was never answered.
+
+**Changed on the way in:** the link is an argument. One copy built it as
+`${CHATWOOT_BASE_URL}/app/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${id}`
+from env vars the kit is not allowed to read and that copy's `.env.example`
+did not define; the other already took `conversationUrl` from the caller and
+said in a comment why. The kit takes the stricter copy: the caller passes a URL
+or `null`, and with `null` the notice names the conversation number rather than
+pointing at `/app/accounts//conversations/123`. A product whose env does set
+both variables builds the same URL it always did, in its wiring file. The
+recipient (`to`) is an argument for the same reason — which inbox an
+installation escalates to is not the kit's to know.
+
+### infra
+
+`ErrorContext.component` now also admits `'mailer'` and `'notify'`. Additive;
+no existing `reportError` needs to change.
+
+### Considered and not added
+
+`env` (a typed reader over `process.env`) has one consumer and waits for a
+second, as `python/exo_core` does. `config` (tsconfig / eslint / vitest
+presets) was measured rather than assumed: the two Next.js products share a
+byte-identical `tsconfig.json` and `eslint.config.mjs`, but the first is the
+framework's own scaffold and the second is half product policy (design-canon
+lint rules naming a design system one of the two does not have); the other two
+products share neither target, module resolution nor strictness with them. What
+is genuinely common is one line of vitest configuration, and it is documented in
+the README under *Testing a product against the kit* rather than shipped.
+
 ## v0.3.0 — 2026-09-11
 
 Two new modules, and both arrived the same way: the mechanism was identical to

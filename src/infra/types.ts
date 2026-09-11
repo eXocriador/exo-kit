@@ -14,7 +14,7 @@
  */
 export interface ErrorContext {
   /** Which kit module produced this. */
-  component: 'db' | 'redis' | 'llm';
+  component: 'db' | 'redis' | 'llm' | 'mailer' | 'notify';
   /** Stable dotted event name, e.g. `db.query_error`. Safe to use as a metric key. */
   event: string;
   /** Extra structured fields. Never contains a credential or a query parameter. */

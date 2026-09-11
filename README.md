@@ -3,7 +3,8 @@
 Shared mechanism for a handful of small self-hosted services: database and
 cache accessors, structured logging with an audit trail, a multi-provider LLM
 client, JSON responses and request pacing, the primitives behind session auth,
-and the SDK a product mounts to be supportable.
+transactional email and the notice that gets an escalation to a human, and the
+SDK a product mounts to be supportable.
 
 One npm package with subpath exports, one git tag for the whole kit, and one
 rule that shapes every module in it:
@@ -21,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.3.0
+npm i github:eXocriador/exo-kit#v0.4.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -37,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.3.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.4.0#subdirectory=python"
 ```
 
 ## Modules
@@ -51,6 +52,8 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.3.0#subdirectory=python"
 | `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
+| `@exo/kit/mailer` | `createMailer` — transactional email over Resend; `senderAddress`, `isOwnSender` | nothing |
+| `@exo/kit/notify` | `createTelegramDm`, `createEscalationNotifier` — Telegram first, email as the fallback | nothing |
 | `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
 Peer dependencies (`postgres`, `ioredis`, `pino`) are optional, and the right
@@ -139,6 +142,39 @@ export const {
 });
 ```
 
+```ts
+// src/lib/email/mailer.ts
+import { createMailer } from '@exo/kit/mailer';
+import { logError } from '@/lib/log';
+
+export const { mailerEnabled, sendEmail, isOwnSender } = createMailer({
+  apiKey: process.env.RESEND_API_KEY,
+  from: process.env.EMAIL_FROM,
+  reportError: (err, ctx) => logError('email_send_failed', err, ctx.fields),
+});
+```
+
+```ts
+// src/lib/support/notify.ts
+import { createTelegramDm, createEscalationNotifier } from '@exo/kit/notify';
+import { sendEmail } from '@/lib/email/mailer';
+
+const { notifyEscalation: notify } = createEscalationNotifier({
+  telegram: createTelegramDm({
+    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.SUPPORT_OWNER_TELEGRAM_CHAT_ID,
+  }),
+  sendEmail,
+});
+
+// The product decides who is told and where the conversation is opened. The
+// kit will not build that URL: which account a conversation lives in is a
+// fact about the product, and a copy that read it from an env var would emit
+// `/app/accounts//conversations/123` in any installation that left it unset.
+export const notifyEscalation = (input: { conversationId: number; category: string; reason: string | null; shadow: boolean }) =>
+  notify({ ...input, to: SUPPORT_EMAIL, conversationUrl: conversationUrl(input.conversationId) });
+```
+
 Destructuring is the point: the returned functions are bound to that instance,
 so existing flat call sites (`dbQuery(...)`, `logWarn(...)`, `resolveSession(id)`)
 keep working and the diff is one file instead of every file.
@@ -157,6 +193,23 @@ runs without one should not spend its error budget saying so.
 which is fine for a read path that degrades to empty and dangerous for anything
 whose empty result *means* something. An exactly-once ledger reads a swallowed
 error as "already handled".
+
+### Testing a product against the kit
+
+Vitest hands a dependency from `node_modules` straight to Node, so a
+`vi.mock('node:dns/promises')` in a product test never reaches the kit's SSRF
+guard, and the test goes green without running the code it names. Any product
+that takes a module with a `node:*` import from the kit and mocks that builtin
+in its own tests needs the kit transformed rather than externalised:
+
+```ts
+// vitest.config.ts, in the node project
+server: { deps: { inline: [/@exo\/kit/] } },
+```
+
+Modules whose "Pulls in" column reads *nothing* (`json`, `llm`, `mailer`,
+`notify`, `auth-core/cookie`) take `fetchImpl` or plain arguments instead and
+need no such line.
 
 ## Three conditions
 
