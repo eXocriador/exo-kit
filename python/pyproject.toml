@@ -1,0 +1,19 @@
+[project]
+name = "exo-core"
+version = "0.1.0"
+description = "Python half of exo-kit — same rule as the TypeScript half: factories with explicit config, no process environment, no product names."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "eXocriador" }]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/eXocriador/exo-kit"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["exo_core"]
