@@ -1,5 +1,5 @@
 import type { ChatMessage, ChatProvider, GenerateOptions, ProviderHooks } from '../types.js';
-import { asArray, asString, isRecord } from '../../infra/json.js';
+import { asArray, asString, isRecord } from '../../json/index.js';
 
 export interface AnthropicConfig extends ProviderHooks {
   /** Default `https://api.anthropic.com`. */

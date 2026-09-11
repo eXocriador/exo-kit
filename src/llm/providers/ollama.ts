@@ -1,5 +1,5 @@
 import type { ChatMessage, ChatProvider, GenerateOptions, ProviderHooks } from '../types.js';
-import { asArray, asString, getPath } from '../../infra/json.js';
+import { asArray, asString, getPath } from '../../json/index.js';
 
 export interface OllamaConfig extends ProviderHooks {
   /** Default `http://localhost:11434`. */

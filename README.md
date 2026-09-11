@@ -20,7 +20,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.1.0
+npm i github:eXocriador/exo-kit#v0.2.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -36,21 +36,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.1.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.2.0#subdirectory=python"
 ```
 
 ## Modules
 
-| Import | What it gives you |
-|---|---|
-| `@exo/kit/infra` | `createDb`, `createRedis`, untrusted-JSON helpers |
-| `@exo/kit/log` | `createLogger` — pino + an audit trail, optional log shipping |
-| `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway |
-| `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector |
+| Import | What it gives you | Pulls in |
+|---|---|---|
+| `@exo/kit/infra` | `createDb`, `createRedis` | `postgres`, `ioredis` |
+| `@exo/kit/json` | `isRecord`, `asArray`, `asString`, `asNumber`, `asBoolean`, `get`, `getPath` | nothing |
+| `@exo/kit/log` | `createLogger` — pino + an audit trail, optional log shipping | `pino` |
+| `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway | nothing |
+| `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
-Peer dependencies (`postgres`, `ioredis`, `pino`) are optional. Importing a
-subpath pulls in only that module's, so a product that wants a logger does not
-need a Postgres driver on disk.
+Peer dependencies (`postgres`, `ioredis`, `pino`) are optional, and the right
+column is the reason to care which subpath you reach for. `@exo/kit/infra` is a
+barrel over a pool and a cache, so importing it walks into both drivers — take
+the JSON helpers from `@exo/kit/json`, which imports nothing at all. They are
+re-exported from `infra` as well, and that is compatibility, not an invitation:
+a driver that reaches a browser bundle is a build failure (`Can't resolve
+'net'`), not a size regression, and the first thing that says so is the
+bundler. `test/entry-graph.test.ts` pins each row of that column.
 
 ## Using it
 

@@ -1,5 +1,5 @@
 import type { ChatMessage, ChatProvider, GenerateOptions, ProviderHooks } from '../types.js';
-import { asString, getPath } from '../../infra/json.js';
+import { asString, getPath } from '../../json/index.js';
 
 export interface VibeConduitConfig extends ProviderHooks {
   /** Default `http://localhost:8318`. */

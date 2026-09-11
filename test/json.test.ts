@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isRecord, asArray, asString, asNumber, asBoolean, get, getPath } from '../src/infra/json.js';
+import { isRecord, asArray, asString, asNumber, asBoolean, get, getPath } from '../src/json/index.js';
 
 describe('isRecord', () => {
   it('is true only for plain objects', () => {
