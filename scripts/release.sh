@@ -24,10 +24,14 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 
 # Робоче дерево має бути чистим, крім того, що змінює сам реліз (package.json,
-# CHANGELOG.md, dist/). Інакше в тег поїде щось, чого автор релізу не бачив.
-if ! git diff --quiet -- ':!package.json' ':!CHANGELOG.md' ':!dist' ||
+# package-lock.json, CHANGELOG.md, dist/). Інакше в тег поїде щось, чого автор
+# релізу не бачив. Лок тут тому, що `npm version` оновлює і його: до v0.2.0
+# цього не було видно, бо номер у локі вже збігався, а після першого ж
+# справжнього підняття версії він лишався неврахованим — і наступний реліз
+# зупинявся на власному сліді.
+if ! git diff --quiet -- ':!package.json' ':!package-lock.json' ':!CHANGELOG.md' ':!dist' ||
    ! git diff --cached --quiet; then
-  echo "Робоче дерево брудне поза package.json / CHANGELOG.md / dist/." >&2
+  echo "Робоче дерево брудне поза package.json / package-lock.json / CHANGELOG.md / dist/." >&2
   git status --short >&2
   exit 1
 fi
@@ -56,7 +60,7 @@ test -f dist/index.js || { echo "dist/ порожній після збірки"
 
 echo "── 4/5 версія і коміт ──"
 npm version "$VERSION" --no-git-tag-version --allow-same-version >/dev/null
-git add package.json CHANGELOG.md dist
+git add package.json package-lock.json CHANGELOG.md dist
 git commit -m "Реліз $TAG"
 git tag -a "$TAG" -m "@exo/kit $TAG"
 
