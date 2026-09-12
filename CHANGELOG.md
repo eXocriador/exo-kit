@@ -3,6 +3,128 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.5.0 — 2026-09-12
+
+Three modules that were never mechanism in anyone's repository, because each
+one looked too small to extract: two health routes, an `env.ts`, a
+`captureException` that knows which SDK is installed. Counted across the
+portfolio they are eight hand-written probes, two env readers and none in the
+other nine products, and one seam that had already been extracted once by hand.
+
+### health (new subpath)
+
+New: `@exo/kit/health` — `createHealth({ version, checks, required, timeoutMs,
+reportError })` → `live(): Response` and `ready(): Promise<Response>`. It
+imports nothing; the entry-graph test holds the row empty.
+
+`live` answers 200 without calling a check, because a compose healthcheck hits
+it and restarting a healthy process would not fix the database under it.
+`ready` runs every check concurrently, each under its own timeout, and answers
+503 when a check named in `required` failed. Both bodies are the shape the
+products' contract already fixes: `{status, version, checks}`.
+
+Three decisions worth naming.
+
+**`required` is explicit and has no default.** "All of them" and "none of them"
+are each wrong for some product — Qdrant in exointel and qBittorrent in
+syncwatch are features, not the product — and the silent version of that choice
+is a monitor that is green for a reason nobody chose. A name in `required` that
+is not a check throws at construction: that typo would otherwise turn a
+required check optional in silence.
+
+**A timeout per check, not per probe.** netwatch had raced a timer against
+`redis.ping()` by hand with a comment explaining that a reconnecting ioredis
+client waits longer than the monitor's interval. A hung dependency is
+indistinguishable from a failed one at the probe's end, so it is a `fail` after
+`timeoutMs` (default 3 s) and the timer is cleared either way.
+
+**`skip` is a third state and never fails the probe** — exo-vpn's missing `wg`
+binary outside production is a configuration, not a fault. Checks may also
+return a boolean or throw, which are the two shapes the existing probes have
+(`() => store.ping()` and a tagged `select 1` that throws); the kit maps them rather than
+asking nine products to map them nine times.
+
+### env (new subpath)
+
+New: `@exo/kit/env` — `defineEnv(schema, source)` and
+`renderEnvExample(schema)`, with field constructors `str`, `num`, `bool`,
+`url`, `enumOf` and `custom`. **`zod` is a new optional peer dependency**
+(`^3.25`), and it stays behind this one entry.
+
+No TypeScript product in the portfolio validated its environment, and the
+failures all had one shape: a `PORT` that parsed to `NaN` and quietly became
+the default, half a provider key pair that renders a login button leading to
+the provider's error page, a connection string spelled `POSTGRES_URL` here and
+`DATABASE_URL` there. The one product that did validate (exopost, through
+`pydantic-settings`) has none of them.
+
+**The source is an argument, and that is not a detail.** The rule at the top of
+the README — a module never reads `process.env` — has no exception in it, and
+this module least of all: `defineEnv(schema, process.env)` is the single line
+where a product touches the environment, which is exactly what makes everything
+below it portable and every test able to hand in a plain object.
+
+**Empty is not configured.** `FOO=` in a `.env` is how an operator leaves
+something for later, so an optional field reads absent *and* empty as `null` —
+the same state `createDb({ url: null })` already supports — and a required one
+says so by name. Values are trimmed, because the whitespace an editor adds is
+the whitespace nobody can see.
+
+**The error never carries the value.** An env failure is the most likely thing
+in a deployment to be pasted into a chat window, and the variables that fail
+are the secrets. Messages are built from the schema — what was expected, which
+values are allowed — and never from what arrived; the one place a message can
+come from elsewhere (`custom`, whose zod message is often the most useful text
+available) is used only after the raw value has been shown not to appear in it.
+`zod`'s own message for a rejected enum quotes the rejected value, which is how
+this was found. Every bad variable is reported at once: a fresh deployment has
+three of them wrong, and one restart per variable is not a diagnostic.
+
+`renderEnvExample(schema, { header })` writes the `.env.example`. That file is
+the one piece of documentation an operator actually follows and the first to
+drift — a variable added in code and not in the example is invisible until the
+deployment that needs it. A field marked `secret` renders with an empty value
+(a placeholder that looks like a key is one somebody pastes into production),
+and `omitExample` leaves out what compose or a build arg supplies.
+
+### telemetry (new subpath)
+
+New: `@exo/kit/telemetry` — `createTelemetry({ reporter, logError, logWarn })`
+→ `{ captureException, captureMessage, setReporter, reportError }`. Imports
+nothing, which is the entire point: a product may run Sentry, may run something
+else, may run nothing, and a module that hard-imported an SDK would be deciding
+that for every product that imports it.
+
+Lifted from teamself, which had already extracted it by hand when its support
+engine stopped being a Next.js app still calling `@sentry/nextjs`. Nothing
+wired is the normal state — before the DSN is set, and in every test — and a
+reporter that throws is swallowed, because telemetry must never be what takes
+down a request that was already handling a failure. `setReporter` works after
+boot, since the SDK is usually configured later than the modules that report
+through it.
+
+**Added on the way in: `reportError`.** `createDb`, `createRedis`,
+`createMailer` and `createLogger` each take a `reportError(err, ctx)`, and
+without this every product writes the same mapper next to each of them. The
+telemetry hands one out ready-made — `reportError: telemetry.reportError` — and
+flattens `ctx.fields` into the reporter's context, where one level less nesting
+is one click less in every UI. The kit modules themselves are unchanged.
+
+### infra
+
+`ErrorContext.component` accepts `'health'`. Same widening as v0.4.0 made for
+`'mailer'` and `'notify'`, and for the same reason: the union is what tells a
+reporter which mechanism is speaking.
+
+### Tests
+
+317 → 359. The three new suites were written before the modules and were
+checked against three mutations of the finished code: making an optional check
+fail the probe, taking the error message from `zod` instead of from the schema,
+and removing the guard around a throwing reporter. Each mutation turned a test
+red, which is the only evidence that the tests are about the code and not about
+themselves.
+
 ## v0.4.0 — 2026-09-11
 
 Two new modules from the support side of two products, and one widened type.

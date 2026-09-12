@@ -133,6 +133,27 @@ describe('subpath entries and what they import', () => {
     expect([...bareSpecifiers('notify/index.ts')]).toEqual([]);
   });
 
+  it('@exo/kit/health reaches no package at all', () => {
+    // Two `Response` objects and a `setTimeout`. The probe is the one route a
+    // monitor is allowed to reach on a product that is otherwise broken, so it
+    // must not be able to fail to import: the `ReportError` it takes is a type.
+    expect([...bareSpecifiers('health/index.ts')]).toEqual([]);
+  });
+
+  it('@exo/kit/telemetry reaches no package at all', () => {
+    // The whole point of the seam. A module that imported an error-reporting
+    // SDK would be choosing one for every product that imports it — which is
+    // the coupling teamself extracted this out of.
+    expect([...bareSpecifiers('telemetry/index.ts')]).toEqual([]);
+  });
+
+  it('@exo/kit/env needs zod and nothing else', () => {
+    // The one new dependency in v0.5.0, and it stays behind one entry: a
+    // product that does not declare its environment through the kit does not
+    // get zod on disk because of the kit.
+    expect([...bareSpecifiers('env/index.ts')].sort()).toEqual(['zod']);
+  });
+
   it('@exo/kit/infra is the one entry that pulls both drivers', () => {
     // Stated, not lamented: this entry exists to hand out a pool and a cache.
     // The test is here so the line stays true in both directions — an entry

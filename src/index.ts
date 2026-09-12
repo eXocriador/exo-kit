@@ -3,7 +3,8 @@
  *
  * Prefer the subpath entries (`@exo/kit/infra`, `@exo/kit/json`,
  * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/http`, `@exo/kit/auth-core`,
- * `@exo/kit/auth-core/cookie`, `@exo/kit/mailer`, `@exo/kit/notify`,
+ * `@exo/kit/auth-core/cookie`, `@exo/kit/health`, `@exo/kit/env`,
+ * `@exo/kit/telemetry`, `@exo/kit/mailer`, `@exo/kit/notify`,
  * `@exo/kit/connector-sdk`): importing a
  * subpath pulls in only that module's peer dependencies, so a product that
  * wants a logger does not need a Postgres driver on disk. `test/entry-graph`
@@ -37,6 +38,20 @@ export type {
   SessionMeta,
 } from './auth-core/index.js';
 export type { SessionCookie, SessionCookieConfig } from './auth-core/cookie.js';
+export type { Health, HealthConfig, HealthBody, HealthCheck, CheckState } from './health/index.js';
+export type {
+  EnvField,
+  EnvSchema,
+  EnvSource,
+  EnvOf,
+  FieldMeta,
+  StrOptions,
+  NumOptions,
+  UrlOptions,
+  CustomSchema,
+  RenderEnvExampleOptions,
+} from './env/index.js';
+export type { Telemetry, TelemetryConfig, TelemetryContext, ErrorReporter } from './telemetry/index.js';
 export type { Mailer, MailerConfig, EmailMessage, MailSendReason } from './mailer/index.js';
 export type {
   TelegramDm,

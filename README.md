@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.4.0
+npm i github:eXocriador/exo-kit#v0.5.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.4.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.5.0#subdirectory=python"
 ```
 
 ## Modules
@@ -52,11 +52,14 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.4.0#subdirectory=python"
 | `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
+| `@exo/kit/health` | `createHealth` — `live()` / `ready()` as Web-standard responses | nothing |
+| `@exo/kit/env` | `defineEnv`, `renderEnvExample` — one schema per product | `zod` |
+| `@exo/kit/telemetry` | `createTelemetry` — one seam for "something went wrong" | nothing |
 | `@exo/kit/mailer` | `createMailer` — transactional email over Resend; `senderAddress`, `isOwnSender` | nothing |
 | `@exo/kit/notify` | `createTelegramDm`, `createEscalationNotifier` — Telegram first, email as the fallback | nothing |
 | `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
-Peer dependencies (`postgres`, `ioredis`, `pino`) are optional, and the right
+Peer dependencies (`postgres`, `ioredis`, `pino`, `zod`) are optional, and the right
 column is the reason to care which subpath you reach for. `@exo/kit/infra` is a
 barrel over a pool and a cache, so importing it walks into both drivers — take
 the JSON helpers from `@exo/kit/json`, which imports nothing at all. They are
@@ -179,6 +182,73 @@ Destructuring is the point: the returned functions are bound to that instance,
 so existing flat call sites (`dbQuery(...)`, `logWarn(...)`, `resolveSession(id)`)
 keep working and the diff is one file instead of every file.
 
+```ts
+// src/lib/health.ts — the two probes, and which of them is allowed to be red
+import { createHealth } from '@exo/kit/health';
+import { db } from '@/lib/infra/db';
+import { redis } from '@/lib/infra/redis';
+
+export const health = createHealth({
+  version: process.env.APP_VERSION ?? 'dev',
+  checks: {
+    db: async () => { await db`select 1`; return 'ok'; },
+    redis: async () => (await redis.ping()) === 'PONG',
+    // A feature, not the product: it reports itself and never takes the
+    // monitor red, because a probe that cries wolf is one nobody reads.
+    qdrant: async () => (await qdrantUp()) ? 'ok' : 'fail',
+  },
+  required: ['db', 'redis'],
+  reportError: telemetry.reportError,
+});
+
+// Next route handlers take it as it is — a route handler IS a Web-standard
+// Request/Response function:
+//   app/health/live/route.ts   export const GET = () => health.live();
+//   app/health/ready/route.ts  export const GET = () => health.ready();
+//
+// Fastify needs the one line that unwraps it:
+//   app.get('/health/ready', async (_req, reply) => {
+//     const res = await health.ready();
+//     return reply.code(res.status).send(await res.json());
+//   });
+```
+
+```ts
+// src/env.ts — the one file in the product that touches the environment
+import { defineEnv, str, num, url, bool, renderEnvExample } from '@exo/kit/env';
+
+export const schema = {
+  POSTGRES_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
+                      describe: 'Shared postgres. Empty = the product runs without one.',
+                      example: 'postgresql://app:<password>@postgres:5432/app' }),
+  SESSION_SECRET: str({ min: 32, secret: true, describe: 'openssl rand -base64 48' }),
+  SESSION_DAYS: num({ default: 30, describe: 'How long a session lives.' }),
+  SECURE_COOKIE: bool({ default: true, describe: 'Off only for http://localhost.' }),
+  PORT: num({ default: 3000, omitExample: true, describe: 'Set by compose.' }),
+};
+
+// Throws on the way up, listing every bad variable by name — and never the
+// value: an env error is the thing most likely to be pasted into a chat.
+export const env = defineEnv(schema, process.env);
+
+// `node -e "…"` in a script, or a test that asserts the file on disk matches:
+// the .env.example stops being a second place to keep the truth.
+export const example = () => renderEnvExample(schema, { header: 'Values are placeholders.' });
+```
+
+```ts
+// src/lib/telemetry.ts — one seam, filled once
+import { createTelemetry } from '@exo/kit/telemetry';
+import { logError, logWarn } from '@/lib/log';
+
+export const telemetry = createTelemetry({ logError, logWarn });
+// …and, where the SDK is configured:
+telemetry.setReporter((err, ctx) => Sentry.captureException(err, { extra: ctx }));
+
+// Every kit factory's `reportError` is then the same one object:
+//   createDb({ url, globalKey: '__db', reportError: telemetry.reportError })
+```
+
 ### Not configured is a state
 
 `createDb({ url: null })` and `createRedis({ url: null })` return working
@@ -208,8 +278,8 @@ server: { deps: { inline: [/@exo\/kit/] } },
 ```
 
 Modules whose "Pulls in" column reads *nothing* (`json`, `llm`, `mailer`,
-`notify`, `auth-core/cookie`) take `fetchImpl` or plain arguments instead and
-need no such line.
+`notify`, `auth-core/cookie`, `health`, `telemetry`) take `fetchImpl` or plain
+arguments instead and need no such line.
 
 ## Three conditions
 
