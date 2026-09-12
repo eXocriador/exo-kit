@@ -3,6 +3,17 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.5.1 — 2026-09-12
+
+### env
+
+`renderEnvExample(schema, { labels })` takes the product's own wording for the
+one line the kit writes itself — required, optional, default. Found by the
+first consumer: the generated `.env.example` is read by an operator, all the
+descriptions in it are the product's, and an English "Required." in the middle
+of them is the kit deciding what language a person reads. The defaults are
+unchanged, so nothing that does not pass `labels` moves.
+
 ## v0.5.0 — 2026-09-12
 
 Three modules that were never mechanism in anyone's repository, because each

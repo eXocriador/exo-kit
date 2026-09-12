@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.5.0
+npm i github:eXocriador/exo-kit#v0.5.1
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.5.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.5.1#subdirectory=python"
 ```
 
 ## Modules

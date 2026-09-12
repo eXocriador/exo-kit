@@ -324,6 +324,17 @@ export function defineEnv<S extends EnvSchema>(schema: S, source: EnvSource): En
 export interface RenderEnvExampleOptions {
   /** Comment block at the top of the file. */
   header?: string;
+  /**
+   * The one line per variable the kit writes itself — whether it must be
+   * filled in. English by default; a product whose operator reads another
+   * language passes its own, because this file is read by a person and the
+   * kit has no business choosing their language.
+   */
+  labels?: {
+    required?: string;
+    optional?: string;
+    default?: (value: string) => string;
+  };
 }
 
 const comment = (text: string): string =>
@@ -350,11 +361,12 @@ export function renderEnvExample(schema: EnvSchema, options: RenderEnvExampleOpt
     if (meta.omitExample) continue;
     const lines: string[] = [];
     if (meta.describe) lines.push(comment(meta.describe));
+    const labels = options.labels ?? {};
     const note = meta.optional
-      ? 'Optional — empty means not configured.'
+      ? (labels.optional ?? 'Optional — empty means not configured.')
       : meta.hasDefault
-        ? `Optional — default: ${String(meta.fallback)}.`
-        : 'Required.';
+        ? (labels.default ?? ((value: string) => `Optional — default: ${value}.`))(String(meta.fallback))
+        : (labels.required ?? 'Required.');
     lines.push(`# ${note}`);
     lines.push(`${name}=${meta.secret ? '' : (meta.example ?? '')}`);
     blocks.push(lines.join('\n'));

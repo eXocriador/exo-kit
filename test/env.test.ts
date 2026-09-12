@@ -221,6 +221,23 @@ describe('renderEnvExample', () => {
     expect(lines.slice(0, postgres).join('\n')).toMatch(/optional/i);
   });
 
+  it('takes the product\'s own words for required and optional', () => {
+    // The file is read by a person, and which language that person reads is
+    // not something a shared mechanism gets to decide.
+    const text = renderEnvExample(schema, {
+      labels: {
+        required: 'Обов\'язкова.',
+        optional: 'Необов\'язкова — порожньо означає «не налаштовано».',
+        default: (value) => `Необов'язкова — типово: ${value}.`,
+      },
+    });
+
+    expect(text).toContain("# Обов'язкова.");
+    expect(text).toContain('# Необов\'язкова — порожньо означає «не налаштовано».');
+    expect(text).not.toMatch(/^# Required\.$/m);
+    expect(text).not.toMatch(/^# Optional/m);
+  });
+
   it('the example values it prints are values the schema accepts', () => {
     // The whole point of generating the file: `.env.example` stops drifting
     // from the code. A placeholder the schema would reject is drift with extra
