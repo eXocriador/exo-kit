@@ -173,6 +173,17 @@ export declare function defineEnv<S extends EnvSchema>(schema: S, source: EnvSou
 export interface RenderEnvExampleOptions {
     /** Comment block at the top of the file. */
     header?: string;
+    /**
+     * The one line per variable the kit writes itself — whether it must be
+     * filled in. English by default; a product whose operator reads another
+     * language passes its own, because this file is read by a person and the
+     * kit has no business choosing their language.
+     */
+    labels?: {
+        required?: string;
+        optional?: string;
+        default?: (value: string) => string;
+    };
 }
 /**
  * The `.env.example` for a schema, as text. It exists because that file is the

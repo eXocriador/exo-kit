@@ -223,11 +223,12 @@ export function renderEnvExample(schema, options = {}) {
         const lines = [];
         if (meta.describe)
             lines.push(comment(meta.describe));
+        const labels = options.labels ?? {};
         const note = meta.optional
-            ? 'Optional — empty means not configured.'
+            ? (labels.optional ?? 'Optional — empty means not configured.')
             : meta.hasDefault
-                ? `Optional — default: ${String(meta.fallback)}.`
-                : 'Required.';
+                ? (labels.default ?? ((value) => `Optional — default: ${value}.`))(String(meta.fallback))
+                : (labels.required ?? 'Required.');
         lines.push(`# ${note}`);
         lines.push(`${name}=${meta.secret ? '' : (meta.example ?? '')}`);
         blocks.push(lines.join('\n'));
