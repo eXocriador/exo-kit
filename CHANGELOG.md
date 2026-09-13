@@ -3,6 +3,17 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.6.2 — 2026-09-13
+
+### auth
+
+New export: `authMigrations({ totp, admin })` — the SQL file list on its own.
+Found by the first consumer's migration runner, in a deploy: reading the list
+through `createAuth` means handing `betterAuth` a database it will try to
+connect to, so a script whose whole job was to read three file names died with
+`Failed to initialize database adapter`. `auth.migrations` is unchanged and is
+now this with the product's flags filled in.
+
 ## v0.6.1 — 2026-09-13
 
 ### auth

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { betterAuth } from 'better-auth';
 import { memoryAdapter } from 'better-auth/adapters/memory';
-import { buildAuthOptions, createAuth, loginFor } from '../src/auth/index.js';
+import { authMigrations, buildAuthOptions, createAuth, loginFor } from '../src/auth/index.js';
 import { createAddressLimit, createAuthRateLimitStorage } from '../src/auth/rate-limit.js';
 import { hashPassword } from '../src/auth-core/password.js';
 
@@ -434,6 +434,19 @@ describe('what the wrapper refuses to expose', () => {
     expect(options.account?.fields?.providerId).toBe('provider');
     expect(options.account?.fields?.accountId).toBe('provider_id');
     expect(options.user?.fields?.emailVerified).toBe('email_verified');
+  });
+
+  it('lists its SQL without building anything — a migration runner needs only that', () => {
+    // Reading the list used to mean constructing `createAuth`, which hands
+    // `betterAuth` a database and dies with "Failed to initialize database
+    // adapter" in a script that wanted three file names. Found by the first
+    // consumer's migration runner, in a deploy.
+    expect(authMigrations().map((path) => path.split('/').pop())).toEqual(['001_kit_auth.sql']);
+    expect(authMigrations({ totp: true, admin: true }).map((path) => path.split('/').pop())).toEqual([
+      '001_kit_auth.sql',
+      '002_kit_auth_2fa.sql',
+      '003_kit_auth_admin.sql',
+    ]);
   });
 
   it('ships the 2FA migration only to a product that enabled TOTP', () => {

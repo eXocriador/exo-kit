@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.6.1
+npm i github:eXocriador/exo-kit#v0.6.2
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.6.1#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.6.2#subdirectory=python"
 ```
 
 ## Modules
@@ -235,8 +235,13 @@ plugin-field rename bug was found: `options.user.fields` does not reach a field 
 
 ### Migrations
 
-`auth.migrations` is a list of SQL file paths, in order, for the product's runner
-to apply **before its own**: `001_kit_auth.sql` always, `002_kit_auth_2fa.sql`
+`auth.migrations` — or `authMigrations({ totp, admin })`, which is the same list
+without building anything, and is what a migration runner should use: reading it
+through `createAuth` means handing `betterAuth` a database it will try to
+connect to, and the script dies with `Failed to initialize database adapter`.
+
+The list is SQL file paths, in order, for the product's runner to apply
+**before its own**: `001_kit_auth.sql` always, `002_kit_auth_2fa.sql`
 only with `totp`, `003_kit_auth_admin.sql` only with `admin`. Each one is
 convergent — `CREATE TABLE IF NOT EXISTS` for a new product, `ADD COLUMN IF NOT
 EXISTS` for one that already has `auth.md`-shaped tables. What they deliberately
