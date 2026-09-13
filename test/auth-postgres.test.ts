@@ -50,9 +50,9 @@ suite('the schema the module ships, against a real Postgres', () => {
           sent.push(text);
         },
         letters: {
-          magicLink: (url) => ({ subject: 'link', text: url }),
-          verifyEmail: (url) => ({ subject: 'verify', text: url }),
-          resetPassword: (url) => ({ subject: 'reset', text: url }),
+          magicLink: (link) => ({ subject: 'link', text: link.url }),
+          verifyEmail: (link) => ({ subject: 'verify', text: link.url }),
+          resetPassword: (link) => ({ subject: 'reset', text: link.url }),
         },
         password: true,
       },

@@ -26,9 +26,9 @@ interface Store {
 const emptyStore = (): Store => ({ users: [], sessions: [], identities: [], verification: [] });
 
 const letters = {
-  magicLink: (url: string, minutes: number) => ({ subject: 'link', text: `${url} ${minutes}` }),
-  verifyEmail: (url: string) => ({ subject: 'verify', text: url }),
-  resetPassword: (url: string) => ({ subject: 'reset', text: url }),
+  magicLink: (link: { url: string }, minutes: number) => ({ subject: 'link', text: `${link.url} ${minutes}` }),
+  verifyEmail: (link: { url: string }) => ({ subject: 'verify', text: link.url }),
+  resetPassword: (link: { url: string }) => ({ subject: 'reset', text: link.url }),
 };
 
 interface Built {
@@ -191,6 +191,48 @@ describe('a magic link into an unproven account', () => {
     expect(store.users).toHaveLength(1);
     expect(store.users[0]!.email_verified).toBe(true);
     expect(store.identities).toHaveLength(0);
+  });
+});
+
+describe('the letter', () => {
+  it('carries the raw token as well as the ready URL', async () => {
+    // Not a convenience. The ready URL consumes the token on a GET, and mail
+    // scanners follow links before a person does — so a product that wants its
+    // own consume page needs the token itself. filebrowser had that page before
+    // this module existed and keeps it.
+    const seen: { url: string; token: string; minutes: number }[] = [];
+    const store = emptyStore();
+    const auth = createAuth<{ userId: string }>({
+      db: memoryAdapter(store as unknown as Record<string, Row[]>),
+      secret: () => SECRET,
+      baseUrl: 'http://localhost:3000',
+      cookieName: 'probe_session',
+      secureCookie: false,
+      sessionDays: 7,
+      providers: {},
+      email: {
+        send: async () => {},
+        linkMinutes: 20,
+        letters: {
+          magicLink: (link, minutes) => {
+            seen.push({ ...link, minutes });
+            return { subject: 'link', text: link.url };
+          },
+        },
+      },
+      resolvePrincipal: async (userId) => ({ userId }),
+    });
+
+    await (
+      auth.instance.api as unknown as {
+        signInMagicLink(args: { body: { email: string }; headers: Headers }): Promise<unknown>;
+      }
+    ).signInMagicLink({ body: { email: 'a@example.com' }, headers: new Headers() });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.token).toMatch(/^[A-Za-z]{32}$/);
+    expect(seen[0]!.url).toContain(seen[0]!.token);
+    expect(seen[0]!.minutes).toBe(20);
   });
 });
 

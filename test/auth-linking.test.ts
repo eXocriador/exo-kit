@@ -56,7 +56,7 @@ function build(store: Store, options: { trustedProviders?: string[] } = {}) {
     providers: {},
     email: {
       send: async () => {},
-      letters: { magicLink: (url) => ({ subject: 's', text: url }) },
+      letters: { magicLink: (link) => ({ subject: 's', text: link.url }) },
     },
     resolvePrincipal: async (userId) => ({ userId }),
   });

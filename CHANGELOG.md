@@ -3,6 +3,23 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.6.1 — 2026-09-13
+
+### auth
+
+`letters.magicLink` (and the two password letters) now receive
+`{ url, token }` instead of a ready URL alone, and the `beforeLink` hook is
+gone. Both found by the first consumer.
+
+The token is there because the ready URL consumes it on a GET, and mail scanners
+follow links before a person does — filebrowser has had a consume PAGE since it
+was written for exactly that reason, and without the raw token it could not keep
+it. `beforeLink` went because it could only be handed nulls: the thing it was
+sketched for is the provider prefix in `state`, and Better Auth's own state
+handling (a row and a signed cookie, both compared, row deleted on use) is
+strictly stronger than the prefix check it would have rebuilt. The README says
+so where a reader of the standard will look for it.
+
 ## v0.6.0 — 2026-09-13
 
 ### auth (new subpath)

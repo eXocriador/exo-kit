@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.6.0
+npm i github:eXocriador/exo-kit#v0.6.1
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.6.0#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.6.1#subdirectory=python"
 ```
 
 ## Modules
@@ -109,7 +109,8 @@ export const auth = createAuth<Principal>({
   providers: {},                             // empty is a working state
   email: {
     send: (to, subject, text) => mailer.send({ to, subject, text }),
-    letters: { magicLink: (url, minutes) => loginEmail(url, minutes) },
+    // `link` carries both the ready URL and the raw token — see below.
+    letters: { magicLink: (link, minutes) => loginEmail(link, minutes) },
     perAddressLimit: { max: 3, windowMs: 15 * 60_000 },
   },
   rateLimitStorage: createAuthRateLimitStorage({ redis: redis.client }),
@@ -184,6 +185,25 @@ decision 3 — without verification at sign-up, a person who registers with a
 password and then clicks a login link loses that password permanently and
 silently. `test/auth-wrapper.test.ts` pins the behaviour so it cannot change
 under us unnoticed.
+
+### The letter gets the token, not just the URL
+
+`letters.magicLink({ url, token }, minutes)`. The ready `url` consumes the token
+on a **GET**, and mail scanners and link previewers follow URLs before a person
+does — a one-time link they burn makes the login fail silently for whoever asked
+for it. A product that cares puts `…/login?token=<token>` in the letter instead,
+pointing at a page whose *button* navigates to the verify route; the scanner then
+fetches a static page and spends nothing. filebrowser does that.
+
+### What is NOT reproduced from `auth.md`
+
+The standard puts the provider's name inside the `state` value
+(`"<provider>.<nonce>"`) so a code from one path cannot be presented on another
+"before the network". Better Auth does not, and does something stronger instead:
+the state is written to both a row and a signed cookie, both are compared on
+return, and the row is deleted on use. The prefix only ever added an earlier
+failure to an exchange that could not have succeeded anyway, so it is dropped
+rather than rebuilt.
 
 ### Two ceilings, counting different things
 
