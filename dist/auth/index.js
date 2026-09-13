@@ -59,10 +59,12 @@ import { twoFactor } from 'better-auth/plugins/two-factor';
 import { hashPassword, verifyPassword } from '../auth-core/password.js';
 import { createAddressLimit, } from './rate-limit.js';
 import { createAuthFastifyPlugin } from './fastify.js';
+import { authMigrations } from './migrations.js';
 import { ADMIN_SESSION_FIELDS, ADMIN_USER_FIELDS, IDENTITY_FIELDS, MODEL_NAMES, SESSION_FIELDS, TWO_FACTOR_FIELDS, TWO_FACTOR_USER_FIELDS, USER_FIELDS, VERIFICATION_FIELDS, loginFor, } from './schema.js';
 export { createAuthRateLimitStorage, createAddressLimit, } from './rate-limit.js';
 export { MODEL_NAMES, loginFor } from './schema.js';
 export { createAuthFastifyPlugin } from './fastify.js';
+export { authMigrations } from './migrations.js';
 const BASE_PATH = '/api/account';
 const DEFAULT_LINK_MINUTES = 15;
 /** `filebrowser_session` → `filebrowser`, so every other cookie is ours too. */
@@ -282,30 +284,6 @@ export function buildAuthOptions(o) {
         },
     };
     return options;
-}
-/**
- * The SQL files this module ships, in the order they must be applied.
- *
- * Separate from `createAuth` on purpose, and the first consumer is why: a
- * migration runner wants nothing but this list, and building a whole auth
- * instance to read it means handing `betterAuth` a database it will try to
- * connect to — which fails with `Failed to initialize database adapter` from a
- * script whose entire job was to read three file names.
- *
- * Both optional files are gated on the option that needs them: a product with
- * no second factor should not carry a `two_factor` table, and the `admin`
- * plugin's four columns on `users` are dead weight — and a lie about what the
- * product does — anywhere it is off. Pass the same flags the product passes to
- * `createAuth`, or read `auth.migrations`, which is this with them filled in.
- */
-export function authMigrations(options = {}) {
-    const dir = new URL('../../migrations/auth/', import.meta.url);
-    const files = [
-        '001_kit_auth.sql',
-        ...(options.totp ? ['002_kit_auth_2fa.sql'] : []),
-        ...(options.admin ? ['003_kit_auth_admin.sql'] : []),
-    ];
-    return files.map((file) => new URL(file, dir).pathname);
 }
 /**
  * Build the product's login.

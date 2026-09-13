@@ -1,0 +1,1 @@
+{"version":3,"file":"migrations.d.ts","sourceRoot":"","sources":["../../src/auth/migrations.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;GAWG;AAEH;;;;;;;;GAQG;AACH,wBAAgB,cAAc,CAAC,OAAO,GAAE;IAAE,IAAI,CAAC,EAAE,OAAO,CAAC;IAAC,KAAK,CAAC,EAAE,OAAO,CAAA;CAAO,GAAG,MAAM,EAAE,CAQ1F"}

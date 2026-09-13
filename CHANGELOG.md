@@ -3,6 +3,49 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.7.0 — 2026-09-13
+
+### migrate (new)
+
+`@exo/kit/migrate` — `syncKitMigrations`, `checkKitMigrations`,
+`migrationVersion`, and the `exo-kit-migrations` CLI the package now installs.
+Migrations across the box are applied by **dbmate** in its own container
+(plan §4.3, B3); this module is the part of that which cannot be a shell
+script — it copies the SQL a block ships into the product's tree, where dbmate
+can read it, and fails a gate when the copy and the installed package have
+drifted apart. The decision to vendor rather than resolve paths at run time,
+and what the rejected alternative would have cost, are in the README section
+"Migrations: `@exo/kit/migrate`".
+
+`templates/migrate.sh` ships with the package: the canonical dbmate wrapper,
+with the five traps it exists to avoid written into it.
+
+### auth
+
+**Breaking, for anything that reads the file names.** The SQL is renamed to
+what dbmate orders by:
+
+    001_kit_auth.sql       → 20200101000001_kit_auth.sql
+    002_kit_auth_2fa.sql   → 20200101000002_kit_auth_2fa.sql
+    003_kit_auth_admin.sql → 20200101000003_kit_auth_admin.sql
+
+`authMigrations()` and `auth.migrations` are unchanged in shape and return the
+new paths. The `20200101` prefix is an ordering floor, not a date: dbmate
+orders by that number across every `-d` directory at once, and a kit block must
+land before product migrations that are themselves older than this module. A
+product already carrying the old names must rename its recorded rows — the
+recipe is in the README ("Moving a live database onto dbmate").
+
+Each file now carries `-- migrate:up` and `-- migrate:down`. dbmate 2.35.1
+refuses a migration missing either, at apply time rather than at `status`. The
+down block raises: a convergent migration has no single meaning for "undo", and
+every honest guess drops a table with accounts in it.
+
+`authMigrations` moved to its own module (`auth/migrations.ts`, still exported
+from `@exo/kit/auth`) so reading the list imports no `better-auth`. The CLI
+needs it in an image build where that peer dependency may not be installed at
+all — the same reason v0.6.2 split it off `createAuth`, one step further.
+
 ## v0.6.2 — 2026-09-13
 
 ### auth

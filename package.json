@@ -1,7 +1,7 @@
 {
   "name": "@exo/kit",
-  "version": "0.6.2",
-  "description": "Shared mechanism for small self-hosted services: infra (postgres/redis/json), structured logging, multi-provider LLM client, HTTP responses and rate limiting, session auth primitives and a Better Auth login that cannot be configured out of our policy, health probes, environment schemas, an error-reporting seam, transactional email and escalation notices, support-connector SDK. Factories only — the kit never reads process.env and never knows a product's name.",
+  "version": "0.7.0",
+  "description": "Shared mechanism for small self-hosted services: infra (postgres/redis/json), structured logging, multi-provider LLM client, HTTP responses and rate limiting, session auth primitives and a Better Auth login that cannot be configured out of our policy, health probes, environment schemas, an error-reporting seam, transactional email and escalation notices, support-connector SDK, and the vendoring step that puts a block's SQL migrations where dbmate can read them. Factories only — the kit never reads process.env and never knows a product's name.",
   "license": "MIT",
   "author": "eXocriador",
   "repository": {
@@ -15,10 +15,15 @@
   "files": [
     "dist",
     "migrations",
+    "scripts/kit-migrations.mjs",
+    "templates",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
+  "bin": {
+    "exo-kit-migrations": "./scripts/kit-migrations.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -67,6 +72,10 @@
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "import": "./dist/migrate/index.js"
     },
     "./mailer": {
       "types": "./dist/mailer/index.d.ts",
