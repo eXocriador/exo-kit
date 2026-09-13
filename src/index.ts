@@ -2,7 +2,7 @@
  * `@exo/kit` — shared mechanism for small self-hosted services.
  *
  * Prefer the subpath entries (`@exo/kit/infra`, `@exo/kit/json`,
- * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/http`, `@exo/kit/auth-core`,
+ * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/ai`, `@exo/kit/http`, `@exo/kit/auth-core`,
  * `@exo/kit/auth-core/cookie`, `@exo/kit/health`, `@exo/kit/env`,
  * `@exo/kit/telemetry`, `@exo/kit/mailer`, `@exo/kit/notify`,
  * `@exo/kit/migrate`, `@exo/kit/connector-sdk`): importing a
@@ -16,6 +16,18 @@ export type { Db, DbConfig, DbOutcome, RedisCache, RedisConfig, ErrorContext, Re
 export type { JsonRecord } from './json/index.js';
 export type { KitLogger, LoggerConfig, OpenObserveConfig, AuditRecord, LogFields } from './log/index.js';
 export type { Llm, LlmConfig, ChatMessage, ChatProvider, GenerateOptions, ProviderName } from './llm/index.js';
+export type {
+  AiClient,
+  AiClientConfig,
+  AiTier,
+  AiMessage,
+  AiAttempt,
+  AiAnswer,
+  AiRefusal,
+  CompleteRequest,
+  CompleteResult,
+  UsageResult,
+} from './ai/index.js';
 export type {
   ApiResponse,
   ApiResponseConfig,

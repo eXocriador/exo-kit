@@ -74,6 +74,13 @@ describe('subpath entries and what they import', () => {
     expect([...bareSpecifiers('connector-sdk/index.ts')].sort()).toEqual(['node:crypto']);
   });
 
+  it('@exo/kit/ai reaches no package at all', () => {
+    // A wire to one HTTP service over global `fetch`, reading its JSON through
+    // `json/`. Any bare specifier here would be a dependency a product pays
+    // for on every support turn and the client has no use for.
+    expect([...bareSpecifiers('ai/index.ts')]).toEqual([]);
+  });
+
   it('@exo/kit/llm reaches no database driver', () => {
     // It talks to HTTP endpoints with global `fetch`. It reads untrusted JSON,
     // which is why it must take those helpers from `json/` directly and never

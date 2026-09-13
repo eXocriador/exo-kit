@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.7.1
+npm i github:eXocriador/exo-kit#v0.8.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.7.1#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.8.0#subdirectory=python"
 ```
 
 ## Modules
@@ -48,7 +48,8 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.7.1#subdirectory=python"
 | `@exo/kit/infra` | `createDb`, `createRedis` | `postgres`, `ioredis` |
 | `@exo/kit/json` | `isRecord`, `asArray`, `asString`, `asNumber`, `asBoolean`, `get`, `getPath` | nothing |
 | `@exo/kit/log` | `createLogger` — pino + an audit trail, optional log shipping | `pino` |
-| `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway | nothing |
+| `@exo/kit/ai` | `createAiClient` — ask the exo-ai model service for a tier; typed refusals | nothing |
+| `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway; `createEmbedder` | nothing |
 | `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
@@ -102,6 +103,74 @@ warning rather than a promise. It pulls `better-auth` in: 50 MB on disk, 86
 packages, about 1.5 s added to start-up and 80 MB of RSS. A product that only
 needs to hash a password or verify a cookie must keep using `auth-core`, which
 costs `node:crypto` and nothing else.
+
+## Models: `@exo/kit/ai`
+
+A product asks the exo-ai service for a **tier** — `fast`, `capable`, `agent` —
+and never for a model. Which model answers, which pool it is metered in, how
+far the ladder has to climb to find a live one and how many calls a product or
+one of its customers may make today live in the service, shared by every
+product. This module is the wire to it.
+
+```ts
+// src/infra/ai.ts — the product's wiring
+import { createAiClient } from '@exo/kit/ai';
+
+export const ai = createAiClient({
+  baseUrl: env.EXO_AI_URL, // http://exo-ai-web:3000
+  key: env.EXO_AI_KEY,     // the product's key; it also names the product in the ledger
+  reportError,
+  logWarn,
+});
+
+const out = await ai.complete({
+  tier: plan.free ? 'fast' : 'capable', // which tier a plan buys is the product's decision
+  messages,
+  subject: `${productId}:user:${userId}`,
+  timeoutMs: 90_000,
+});
+
+if (out.ok) return out.content;                       // plus out.model, out.pool, out.rung
+if (out.error === 'budget_exhausted') return handOver(); // a person, not an error, not a bill
+return failSafe();                                    // all_rungs_failed, timeout, unavailable, …
+```
+
+### Two refusals, two actions
+
+`@exo/kit/llm` answered every failure with `null`, so a product could only
+ever do one thing about all of them. Two of them mean opposite things:
+
+| result | what happened | what the product does |
+|---|---|---|
+| `budget_exhausted` (`degrade: 'human_handoff'`) | a daily ceiling closed; the service is healthy and chose not to call a model | hand the conversation to a person — no error on screen, no charge |
+| `all_rungs_failed` | every rung was tried across pools and none answered | the product's fail-safe |
+| `unknown_tier`, `unauthorized`, `bad_request` | an integration mistake — reported through `reportError` | fail-safe, and fix the wiring |
+| `timeout`, `unavailable` | the service did not answer the contract | fail-safe |
+| `not_configured` | no address or no key; nothing was sent or reported | whatever the product does without models |
+
+A bare 429 or 503 **without** the service's body is `unavailable`, not either
+refusal: it is some other hop talking, and neither "the ceiling closed" nor
+"the ladder ran" is true of it. `complete()` never throws.
+
+### The timeout is the whole ladder's
+
+The service has its own timeout per model and may try several, so the client's
+ceiling bounds the whole climb. It is set per call (`timeoutMs`), with a client
+default of 60 s — `@exo/kit/llm` fixed one 30 s for everything, which made a
+long reasoning call indistinguishable from a dead one. A call the client gave
+up on may still finish, and still count, inside the service.
+
+### What is deliberately not here
+
+* **Retries.** The service retries per model and steps across pools. A client
+  retry would run that ladder again and charge the ceiling twice for one
+  question.
+* **A long `subject`.** The service keeps 200 characters; a longer one is
+  refused before sending, because two subjects sharing a 200-character prefix
+  would share one counter.
+* **Embeddings.** The service does not compute them. `createEmbedder` stays in
+  `@exo/kit/llm`, and so does the chat client, until the last product still
+  calling it has moved.
 
 ## The login: `@exo/kit/auth`
 
@@ -726,7 +795,7 @@ in its own tests needs the kit transformed rather than externalised:
 server: { deps: { inline: [/@exo\/kit/] } },
 ```
 
-Modules whose "Pulls in" column reads *nothing* (`json`, `llm`, `mailer`,
+Modules whose "Pulls in" column reads *nothing* (`json`, `ai`, `llm`, `mailer`,
 `notify`, `auth-core/cookie`, `health`, `telemetry`) take `fetchImpl` or plain
 arguments instead and need no such line.
 
