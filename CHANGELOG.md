@@ -3,6 +3,84 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.6.0 — 2026-09-13
+
+### auth (new subpath)
+
+New: `@exo/kit/auth` — `createAuth({ db, secret, baseUrl, cookieName,
+secureCookie, sessionDays, providers, email, totp, admin, rateLimitStorage,
+trustedProxies, resolvePrincipal, hooks })` → `{ handler, fastifyPlugin,
+getPrincipal, listSessions, revokeSession, migrations, instance }`, over
+**Better Auth 1.7.4**, pinned exactly. Five of the portfolio's login
+implementations become configuration; `auth-core` stays exactly where it is for
+exointel and netwatch until they move.
+
+The module's whole purpose is that **the policy in `auth.md` is not something a
+product can get wrong**. Better Auth can express that policy and can equally
+express its opposite, so seven decisions are fixed in the wrapper and are not
+parameters — the merge rule, the base path and cookie attributes, verification
+at sign-up, the password format, `uuid` ids, the session list without tokens,
+and the encapsulated Fastify mount. The README has each one with its reason.
+
+Three of those came out of the sandbox session and contradict what the
+modularity plan §4.1 recommended:
+
+* **`trustedProviders` weakens the policy, it does not express it.** A provider
+  named there *skips* the incoming `emailVerified` check. The list is therefore
+  empty and not exposed, and `test/auth-linking.test.ts` carries all four merge
+  cases plus that exact violation as a regression — against a fake OAuth
+  provider on loopback, so it needs no keys and no domain.
+* **There is no second account when in doubt.** `users.email` is unique, so the
+  library refuses the login where the standard promised a duplicate account.
+* **A magic link into an unverified row deletes its password and OAuth links.**
+  Deliberate (`GHSA-qq9h-g4jm-xgf3`), and the reason verification at sign-up is
+  fixed on wherever a password exists beside a link.
+
+Decisions worth naming, because a later reader will wonder.
+
+**`id` is `uuid`.** The cost of `text` is not a row migration — `users.id` is
+referenced by five other tables in exoanima and seven in exointel, and each of
+those columns would change type with it. `generateId: 'uuid'` is a first-class
+mode in 1.7.4, so this is cheap and supported.
+
+**`/list-sessions` is disabled and answered by the kit.** The library's version
+returns each session's raw token, and `revokeSession` therefore takes an id that
+is looked up inside the process. A cabinet page that is XSS'd leaks one device's
+id, not every device's credential.
+
+**The address ceiling survives.** The plan said the product's `LoginLimits`
+disappears into the library; only half of it does. Better Auth counts IP + path,
+`LoginLimits` counted the recipient of the letter, and behind Traefik the first
+is one bucket for everybody. `createAuthRateLimitStorage` serves the library's
+ceiling over Redis and `createAddressLimit` keeps ours beside it.
+
+Two bugs found while building it, both fixed here.
+
+* `magic-link` calls `createUser({ email })` with the address **as typed**,
+  while every lookup lowercases it — so a first-ever link from `Alice@x` lands a
+  row no later lookup can find, and the next link makes a second account. The
+  wrapper normalises in a `databaseHooks`, and `UNIQUE (lower(email))` in the
+  migration makes that a guarantee rather than a hope.
+* `options.user.fields` does not reach a field a **plugin** declares, so
+  `twoFactorEnabled`, `banReason`, `banExpires` and `impersonatedBy` were being
+  written in camelCase beside our snake_case columns. The rename now travels
+  through each plugin's own `schema`. Only a real database can see this — the
+  library refuses to serve anything on a schema mismatch — which is why
+  `test/auth-postgres.test.ts` exists and is opt-in via
+  `KIT_TEST_POSTGRES_URL`.
+
+Migrations ship with the module rather than being copied per product:
+`migrations/auth/001_kit_auth.sql` always, `002` with `totp`, `003` with
+`admin`, all convergent so a product that already has `auth.md`-shaped tables
+gets `ADD COLUMN` instead of a rewrite.
+
+**`better-auth` is pinned exactly and is an optional peer dependency** — twenty
+advisories in a year, two of them the holes `auth.md` closed by design, and a
+product that does not mount a login must not pay 50 MB for one. The entry-graph
+test records that price instead of hiding it.
+
+360 → 395 tests (5 of them skipped without a database).
+
 ## v0.5.1 — 2026-09-12
 
 ### env

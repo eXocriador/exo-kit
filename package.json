@@ -1,7 +1,7 @@
 {
   "name": "@exo/kit",
-  "version": "0.5.1",
-  "description": "Shared mechanism for small self-hosted services: infra (postgres/redis/json), structured logging, multi-provider LLM client, HTTP responses and rate limiting, session auth primitives, health probes, environment schemas, an error-reporting seam, transactional email and escalation notices, support-connector SDK. Factories only — the kit never reads process.env and never knows a product's name.",
+  "version": "0.6.0",
+  "description": "Shared mechanism for small self-hosted services: infra (postgres/redis/json), structured logging, multi-provider LLM client, HTTP responses and rate limiting, session auth primitives and a Better Auth login that cannot be configured out of our policy, health probes, environment schemas, an error-reporting seam, transactional email and escalation notices, support-connector SDK. Factories only — the kit never reads process.env and never knows a product's name.",
   "license": "MIT",
   "author": "eXocriador",
   "repository": {
@@ -14,6 +14,7 @@
   },
   "files": [
     "dist",
+    "migrations",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -63,6 +64,10 @@
       "types": "./dist/auth-core/cookie.d.ts",
       "import": "./dist/auth-core/cookie.js"
     },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js"
+    },
     "./mailer": {
       "types": "./dist/mailer/index.d.ts",
       "import": "./dist/mailer/index.js"
@@ -85,12 +90,17 @@
     "scan": "gitleaks dir . --no-banner --redact"
   },
   "peerDependencies": {
+    "better-auth": "1.7.4",
     "ioredis": ">=5",
     "pino": ">=9",
     "postgres": ">=3.4",
-    "zod": "^3.25"
+    "zod": "^3.25",
+    "pg": ">=8.16"
   },
   "peerDependenciesMeta": {
+    "better-auth": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     },
@@ -102,11 +112,17 @@
     },
     "zod": {
       "optional": true
+    },
+    "pg": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
+    "better-auth": "^1.7.4",
     "ioredis": "^5.11.0",
+    "pg": "^8.16.3",
     "pino": "^9.14.0",
     "postgres": "^3.4.9",
     "typescript": "^5.7.0",
