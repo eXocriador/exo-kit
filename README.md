@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.6.2
+npm i github:eXocriador/exo-kit#v0.7.1
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.6.2#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.7.1#subdirectory=python"
 ```
 
 ## Modules
@@ -70,6 +70,25 @@ re-exported from `infra` as well, and that is compatibility, not an invitation:
 a driver that reaches a browser bundle is a build failure (`Can't resolve
 'net'`), not a size regression, and the first thing that says so is the
 bundler. `test/entry-graph.test.ts` pins each row of that column.
+
+**`zod` may be 3 or 4.** The peer range is `^3.25 || ^4` since v0.7.1. It used
+to be `^3.25` alone, and because a peer conflict stops `npm ci` from installing
+the tree *at all*, a product on zod 4 could not install the kit without an
+`overrides` block — which is what tyusha was carrying. Widening it was not a
+guess: every one of the kit's schemas was run against `zod@4.6.4`, and the whole
+suite is green on both majors. Only one thing actually broke, and it is a type
+rather than a behaviour — `CustomSchema<T>`, the argument type of `env.custom()`,
+named `z.ZodTypeDef` in `ZodType`'s second slot, and zod 4 both removed that type
+and gave the slot a different meaning (`Input`). It is now spelled
+`z.ZodType<T, any, any> & { _input: string }`, which means the same thing in both
+majors: a schema whose input is the raw environment string. `test/env.test.ts`
+holds what it accepts and what it refuses, so `npm run typecheck` is the check —
+run it under both majors when touching that type:
+
+```bash
+npm run typecheck && npm test          # whichever major is installed
+npm i zod@4 --no-save && npm run typecheck && npm test && npm i
+```
 
 `@exo/kit/auth-core/cookie` is the same split made a second time, and for a
 sharper reason. An edge proxy verifies a session cookie's signature and has no
@@ -138,7 +157,9 @@ app.register(auth.fastifyPlugin);
    without verification letters throws at construction.
 4. **Passwords are `@exo/kit/auth-core/password`** — one `scrypt$N$r$p$salt$hash`
    format across the portfolio, and the hashes exointel already has are accepted
-   with no reset.
+   with no reset. A product arriving with somebody *else's* format may hand in
+   `email.legacyPassword.verify`; that is a bridge with an end, not a second
+   supported format — see "a password hashed before the kit existed".
 5. **`id` is `uuid`.** See below.
 6. **The session cookie cache is off, and `/list-sessions` never leaves the
    process.** The library answers that route with each session's raw `token` —
@@ -163,6 +184,87 @@ our decision, not the library's. The cost of `text` is not a row migration;
 and every one of those columns would have to change type with it. `uuid` is also
 what `gen_random_uuid()` already put in those rows, so an existing set stays
 valid untouched. A new product pays nothing either way.
+
+### A password hashed before the kit existed
+
+`email.legacyPassword` — added in v0.7.1, and the only amendment fixed decision
+4 has ever taken.
+
+Two products cannot reach this module without it. syncwatch has six live people
+on bcrypt `$2b$10$` and **not one address the kit could mail**; tyusha has its
+own on cost 12. "Everybody resets their password" is not a migration there, it
+is a locked door with nobody on the other side to open it.
+
+```ts
+email: {
+  password: true,
+  legacyPassword: { verify: ({ password, hash }) => bcrypt.compare(password, hash) },
+}
+```
+
+Three rules make it a bridge rather than a hole:
+
+* **It is asked only about a string our own format does not claim.** A
+  `scrypt$…` row never reaches the product's function, so one permissive
+  verifier cannot quietly put the portfolio back on bcrypt.
+* **Accepting a password rewrites the row.** The same sign-in that lets the
+  person in stores `scrypt$…`, and their next one takes the native path. The
+  option empties itself; when `select count(*) from identities where provider =
+  'credential' and password not like 'scrypt$%'` is zero, delete it.
+* **A throw counts as "no".** These rows are exactly where a truncated or
+  half-imported string survives, and `bcrypt.compare` rejects on one. One
+  person's password refused is the right cost; everybody's login returning 500
+  is not.
+
+`bcryptjs` is deliberately **not** a kit dependency — the kit has no opinion
+about which format a product is leaving. It is a `devDependency` only, because a
+test that substituted a fake verifier would prove the kit calls a function it
+was handed, which was never in doubt.
+
+#### Why the rewrite is not inside `verify`
+
+This was the whole design question, and the obvious shape does not work. The
+library types that callback as
+
+```ts
+verify: (data: { password: string; hash: string }) => Promise<boolean>
+```
+
+— no user id, no context, no adapter. It is asked "does this string match this
+hash", and a function that only ever sees those two strings **cannot write a
+row**. So the bridge needs a second seam, and three were on the table:
+
+* `databaseHooks` — never see a plaintext password, so they cannot produce the
+  new hash. Out.
+* `ctx.context.password.checkPassword(userId, ctx)` — does have the identity,
+  and is **built into the context rather than read from the options**
+  (`create-context.mjs` closes over the imported function). It is not a seam at
+  all, and it only delegates to `password.verify` anyway. Out.
+* The module's own `after` middleware on `/sign-in/email` — has the typed
+  password (`ctx.body`), the identity (`ctx.context.newSession`) and the write
+  (`internalAdapter.updatePassword`). **Chosen.**
+
+Nothing is carried over from `verify` — no marker, no map keyed by a hash. A
+sign-in that reached a session proves the password matched, so a stored string
+that is *still foreign at that point* is one the product's reader just accepted.
+That makes the decision stateless, and two people signing in at the same moment
+cannot be confused for each other. It costs one indexed `SELECT` per password
+sign-in, charged only to a product that configured the option.
+
+Two silences are deliberate. The after hooks **also run when the endpoint
+threw** — `dispatch.mjs` keeps the `APIError` as the response and runs them
+anyway — so `newSession` is the success test and a wrong password rewrites
+nothing. And a failed write is logged through the library's logger and
+swallowed: the person is already authenticated, and turning their successful
+login into a 500 to announce that the next one will also be slow is the wrong
+trade.
+
+Proved on a copy of the live syncwatch database with its E1 migration applied —
+all six real `$2b$10$` rows in, all six `scrypt$` out, second sign-in never
+reaching the product's function. `test/auth-legacy-password.test.ts` holds it
+over the memory adapter with real bcrypt strings, and `test/auth-postgres.test.ts`
+holds the half only Postgres can state: that the write lands in the renamed
+columns.
 
 ### Three things the schema changes about `auth.md`
 
@@ -250,6 +352,16 @@ convergent — `CREATE TABLE IF NOT EXISTS` for a new product, `ADD COLUMN IF NO
 EXISTS` for one that already has `auth.md`-shaped tables. What they deliberately
 do not do is change the type of an existing column or move a primary key: that
 needs to know how many rows are in the table, and only the product knows that.
+
+**The migrations must run before `createAuth`, not after.** Better Auth 1.7.4
+checks the schema once and remembers the answer, so an instance built over a
+database that is still missing its columns keeps refusing after the columns
+arrive — with `Database schema mismatch / Missing columns users.two_factor_enabled`
+against a database that plainly has the column. A deploy that constructs the
+login and then runs `migrate.sh` is the shape that hits this. Use
+`authMigrations({ totp, admin })` for exactly that reason: the list is available
+before there is anything to build. Found in v0.7.1, by an opt-in test that had
+been building first and migrating after and failing about half the time.
 
 Enabling `admin` is worth a thought rather than a reflex. Its gate is
 `users.role = 'admin'`, a row in the database — so a product whose admin is

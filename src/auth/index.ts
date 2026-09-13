@@ -26,7 +26,14 @@
  *     sign-up that is the ordinary path through the product, not an edge case.
  *  4. **Passwords are `@exo/kit/auth-core/password`** — `scrypt$N$r$p$salt$hash`,
  *     one format across every product, and the hashes exointel already has are
- *     accepted with no reset (sandbox §3.5).
+ *     accepted with no reset (sandbox §3.5). A product arriving with somebody
+ *     ELSE's format (syncwatch and tyusha carry bcrypt) may hand in
+ *     `email.legacyPassword.verify`, and that is a BRIDGE, not a second
+ *     format: the kit asks it only about a string its own format does not
+ *     claim, and the first sign-in it accepts rewrites the row in `scrypt$`.
+ *     The option therefore empties itself, and the product deletes it. See
+ *     "a password hashed before the kit existed" in the README for why the
+ *     rewrite cannot live inside `verify` and what it costs.
  *  5. **`id` is `uuid`.** See the README; the short version is that `text` ids
  *     would have to be paid for by every table that references `users(id)`.
  *  6. **The session cookie cache is off, and `/list-sessions` never leaves the
@@ -56,7 +63,7 @@ import { admin as adminPlugin } from 'better-auth/plugins/admin';
 import { customSession } from 'better-auth/plugins/custom-session';
 import { magicLink } from 'better-auth/plugins/magic-link';
 import { twoFactor } from 'better-auth/plugins/two-factor';
-import { hashPassword, verifyPassword } from '../auth-core/password.js';
+import { hashPassword, isKitPasswordHash, verifyPassword } from '../auth-core/password.js';
 import {
   createAddressLimit,
   type AuthRateLimitStorage,
@@ -162,6 +169,38 @@ export interface AuthEmailOptions {
    * registration endpoint nobody decided on.
    */
   password?: boolean;
+  /**
+   * The product's PREVIOUS hash format, for a database that predates the kit.
+   *
+   * syncwatch has six live people on `$2b$10$` and not one address the kit
+   * could mail — "everybody resets their password" is not a migration there,
+   * it is a locked door. So the kit accepts a second reader, under three rules
+   * that make it a bridge rather than a second supported format:
+   *
+   *  - **Asked only about a string our own format does not claim.** A
+   *    `scrypt$…` row never reaches this function, so a product cannot quietly
+   *    put the whole portfolio back on bcrypt by passing something permissive.
+   *  - **Accepting a password rewrites the row.** The next sign-in for that
+   *    person takes the native path and this function is never called for them
+   *    again — which is the difference between a bridge and permission to live
+   *    on bcrypt forever.
+   *  - **A throw counts as "no".** The rows this reads are exactly where a
+   *    malformed string survives, and one of those must cost its owner a
+   *    refused password, not everybody a 500.
+   *
+   * `bcryptjs` is deliberately NOT a kit dependency: the kit has no opinion on
+   * which format a product is leaving, and the portfolio should not carry a
+   * hashing library for two products and a finite number of logins.
+   *
+   *     legacyPassword: { verify: ({ password, hash }) => bcrypt.compare(password, hash) }
+   *
+   * Requires `password: true`. When every row is rewritten — `select count(*)
+   * from identities where provider = 'credential' and password not like
+   * 'scrypt$%'` is zero — delete the option.
+   */
+  legacyPassword?: {
+    verify(input: { password: string; hash: string }): boolean | Promise<boolean>;
+  };
 }
 
 export interface CreateAuthOptions<P> {
@@ -255,6 +294,77 @@ export interface KitAuth<P> {
 
 const BASE_PATH = '/api/account';
 const DEFAULT_LINK_MINUTES = 15;
+/** The one route that carries a typed password AND ends in a session. */
+const SIGN_IN_PASSWORD_PATH = '/sign-in/email';
+
+/**
+ * What `rewriteLegacyHash` needs out of the middleware context, named because
+ * `createAuthMiddleware` types `ctx` from a static options object and ours is
+ * assembled from what the product asked for — the same reason the tests narrow
+ * `instance.api`. Every field here is read straight from Better Auth 1.7.4 and
+ * is covered by `test/auth-legacy-password.test.ts`.
+ */
+interface RewriteContext {
+  body?: { password?: unknown };
+  context: {
+    newSession: { user: { id: string } } | null;
+    internalAdapter: {
+      findCredentialAccount(userId: string): Promise<{ password?: string | null } | null>;
+      updatePassword(userId: string, password: string): Promise<void>;
+    };
+    logger: { error(message: string, ...rest: unknown[]): void };
+  };
+}
+
+/**
+ * Put the row this sign-in came from into `scrypt$`.
+ *
+ * **Why this is not inside `emailAndPassword.password.verify`.** The library
+ * hands that callback `{ password, hash }` and nothing else — no user id, no
+ * context, no adapter. It is asked the question "does this string match this
+ * hash", and a function that only ever sees those two strings cannot write a
+ * row. So the bridge needs a second seam, and this is the only place in 1.7.4
+ * that has all three halves at once: the typed password (`ctx.body`), the
+ * identity (`ctx.context.newSession`), and the write
+ * (`internalAdapter.updatePassword`). The alternatives were weighed and are in
+ * the README; the short version is that `databaseHooks` never see a plaintext
+ * password, and `ctx.context.password.checkPassword` is built into the context
+ * rather than read from the options, so it is not a seam at all.
+ *
+ * **Why re-reading the row is the whole correlation.** Nothing is carried over
+ * from `verify` — no marker, no shared map keyed by a hash. A sign-in that
+ * reached a session proves the password matched, so a stored string that is
+ * still foreign AT THIS POINT is one the product's own reader just accepted.
+ * That makes the decision stateless, and two people signing in at the same
+ * moment cannot be confused for each other.
+ *
+ * The cost is one indexed SELECT per password sign-in for as long as the
+ * option is configured, and it is charged only to products that configured it.
+ *
+ * Two deliberate silences:
+ *  - The after hooks also run when the endpoint THREW (dispatch.mjs keeps the
+ *    `APIError` as the response and runs them anyway), so `newSession` is the
+ *    success test. A wrong password rewrites nothing.
+ *  - A failed write is logged and swallowed. The person is already
+ *    authenticated; turning their successful login into a 500 to report that
+ *    the NEXT one will also be slow is the wrong trade. `newSession` is also
+ *    null while a 2FA challenge is in flight — the person has no session yet,
+ *    and their row is rewritten on the sign-in that gives them one.
+ */
+async function rewriteLegacyHash(ctx: RewriteContext): Promise<void> {
+  const session = ctx.context.newSession;
+  if (!session) return;
+  const password = ctx.body?.password;
+  if (typeof password !== 'string' || password === '') return;
+  try {
+    const account = await ctx.context.internalAdapter.findCredentialAccount(session.user.id);
+    const stored = account?.password;
+    if (typeof stored !== 'string' || stored === '' || isKitPasswordHash(stored)) return;
+    await ctx.context.internalAdapter.updatePassword(session.user.id, await hashPassword(password));
+  } catch (error) {
+    ctx.context.logger.error('kit/auth: could not rewrite a legacy password hash', error);
+  }
+}
 
 /** `filebrowser_session` → `filebrowser`, so every other cookie is ours too. */
 function cookiePrefixFrom(cookieName: string): string {
@@ -282,6 +392,17 @@ export function buildAuthOptions<P>(o: CreateAuthOptions<P>): BetterAuthOptions 
     throw new Error(
       'kit/auth: email.password requires email.letters.verifyEmail and email.letters.resetPassword ' +
         '(a password beside a magic link needs verification at sign-up — sandbox report §3.12)',
+    );
+  }
+
+  const legacyPassword = email?.legacyPassword;
+  if (legacyPassword && !passwordOn) {
+    // A reader for the old format, on a login that publishes no password route
+    // at all: nothing would ever call it, and the product would read the option
+    // as proof its old users can still get in.
+    throw new Error(
+      'kit/auth: email.legacyPassword requires email.password (nothing verifies a password ' +
+        'when the password routes are off)',
     );
   }
 
@@ -410,8 +531,24 @@ export function buildAuthOptions<P>(o: CreateAuthOptions<P>): BetterAuthOptions 
           // FIXED 3.
           requireEmailVerification: true,
           // FIXED 4 — one hash format across the portfolio, and exointel's
-          // live rows are accepted as they stand.
-          password: { hash: hashPassword, verify: ({ hash, password }) => verifyPassword(password, hash) },
+          // live rows are accepted as they stand. `legacyPassword` is asked
+          // SECOND and only about a string `scrypt$` does not claim; the row it
+          // accepts is rewritten in `rewriteLegacyHash` below, which is the
+          // half this callback cannot do — see its comment.
+          password: {
+            hash: hashPassword,
+            verify: async ({ hash, password }) => {
+              if (await verifyPassword(password, hash)) return true;
+              if (!legacyPassword || isKitPasswordHash(hash)) return false;
+              try {
+                return await legacyPassword.verify({ password, hash });
+              } catch {
+                // A string the product's own reader cannot read is not a
+                // verified password, and it is also not everybody's 500.
+                return false;
+              }
+            },
+          },
           sendResetPassword: async ({ user, url, token }) => {
             const letter = email!.letters.resetPassword!({ url, token }, linkMinutes);
             await email!.send(user.email, letter.subject, letter.text);
@@ -484,16 +621,21 @@ export function buildAuthOptions<P>(o: CreateAuthOptions<P>): BetterAuthOptions 
           }
         }
       }),
-      after: o.hooks?.afterSignIn
-        ? createAuthMiddleware(async (ctx) => {
-            const session = ctx.context.newSession;
-            if (!session) return;
-            await o.hooks!.afterSignIn!({
-              userId: session.user.id,
-              provider: ctx.path.startsWith('/callback/') ? ctx.path.slice('/callback/'.length) : null,
-            });
-          })
-        : undefined,
+      after:
+        o.hooks?.afterSignIn || legacyPassword
+          ? createAuthMiddleware(async (ctx) => {
+              if (legacyPassword && ctx.path === SIGN_IN_PASSWORD_PATH) {
+                await rewriteLegacyHash(ctx as unknown as RewriteContext);
+              }
+              const session = ctx.context.newSession;
+              if (!session) return;
+              if (!o.hooks?.afterSignIn) return;
+              await o.hooks.afterSignIn({
+                userId: session.user.id,
+                provider: ctx.path.startsWith('/callback/') ? ctx.path.slice('/callback/'.length) : null,
+              });
+            })
+          : undefined,
     },
   };
 

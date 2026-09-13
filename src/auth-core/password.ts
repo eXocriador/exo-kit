@@ -56,9 +56,27 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${N}$${R}$${P}$${salt.toString('base64')}$${derived.toString('base64')}`;
 }
 
-export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+/**
+ * Is this string one of OURS — `scrypt$N$r$p$salt$hash`?
+ *
+ * The shape test `verifyPassword` already made, given a name because a second
+ * caller needs the same answer for a different reason: `@exo/kit/auth` decides
+ * from it whether a stored string belongs to a product's PREVIOUS hash format,
+ * and so whether that product's own verifier may be asked about it (README,
+ * "a password hashed before the kit existed"). One predicate, so "ours" cannot
+ * come to mean two things.
+ *
+ * It answers about the FORMAT, never about the secret: `true` here says only
+ * that `verifyPassword` is the function that can read this string.
+ */
+export function isKitPasswordHash(stored: string): boolean {
   const parts = stored.split('$');
-  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  return parts.length === 6 && parts[0] === 'scrypt';
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  if (!isKitPasswordHash(stored)) return false;
+  const parts = stored.split('$');
   // Defaults only exist to satisfy the checker: the length test above already
   // proves all six are present. An empty string would fail the very next check.
   const [, nStr = '', rStr = '', pStr = '', saltB64 = '', hashB64 = ''] = parts;

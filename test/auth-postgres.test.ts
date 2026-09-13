@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { readFileSync } from 'node:fs';
-import { createAuth } from '../src/auth/index.js';
+import { authMigrations, createAuth } from '../src/auth/index.js';
+import { hashPassword } from '../src/auth-core/password.js';
 
 /**
  * The one claim the memory adapter cannot make: that the SQL is real.
@@ -25,6 +26,24 @@ import { createAuth } from '../src/auth/index.js';
 const URL_ = process.env.KIT_TEST_POSTGRES_URL;
 const suite = URL_ ? describe : describe.skip;
 
+/**
+ * The `migrate:up` half of a dbmate file, which is the half a runner applies.
+ *
+ * Reading the file whole used to be good enough and stopped being so in
+ * v0.6.x, when every kit migration grew the `migrate:down` block dbmate
+ * requires — and ours refuse to roll back by raising, so `beforeAll` died on
+ * `no rollback: 20200101000001_kit_auth` before a single assertion ran. This
+ * suite is opt-in and nothing noticed for two releases. Found while proving
+ * the v0.7.1 legacy-password bridge against a real Postgres.
+ */
+function up(file: string): string {
+  const body = readFileSync(file, 'utf8');
+  const start = body.indexOf('-- migrate:up');
+  const end = body.indexOf('-- migrate:down');
+  if (start < 0) throw new Error(`${file}: no -- migrate:up marker`);
+  return body.slice(start, end < 0 ? undefined : end);
+}
+
 suite('the schema the module ships, against a real Postgres', () => {
   let pool: Pool;
   let auth: ReturnType<typeof createAuth<{ userId: string; login: string | null }>>;
@@ -35,6 +54,17 @@ suite('the schema the module ships, against a real Postgres', () => {
     await pool.query(
       'DROP TABLE IF EXISTS two_factor, verification, sessions, identities, users CASCADE',
     );
+
+    // The migrations the module hands the product, applied the way a product's
+    // runner applies them — in order, each file as one statement batch, and
+    // BEFORE the instance exists. See the admin test for why that ordering is
+    // not a preference: this suite spent its whole life building first and
+    // migrating after, and failed about half the time with "Missing columns
+    // users.two_factor_enabled" on a database that had the column by the time
+    // anybody looked.
+    for (const file of authMigrations({ totp: true })) {
+      await pool.query(up(file));
+    }
 
     auth = createAuth({
       db: pool,
@@ -64,12 +94,6 @@ suite('the schema the module ships, against a real Postgres', () => {
         return rows.rows[0] ? { userId, login: rows.rows[0].login } : null;
       },
     });
-
-    // The migrations the module hands the product, applied the way a product's
-    // runner applies them — in order, each file as one statement batch.
-    for (const file of auth.migrations) {
-      await pool.query(readFileSync(file, 'utf8'));
-    }
   }, 60_000);
 
   afterAll(async () => {
@@ -166,6 +190,19 @@ suite('the schema the module ships, against a real Postgres', () => {
     // fails both ways if 003 is missing or if the rename did not travel through
     // the plugin's schema. The library refuses to serve a request at all on a
     // mismatch, so one call is the whole assertion.
+    // The SQL goes in BEFORE the instance is built, and that ordering is the
+    // reason `authMigrations` exists as a standalone export: Better Auth 1.7.4
+    // checks the schema once and REMEMBERS the answer, so an instance
+    // constructed over a database that is missing its columns keeps refusing
+    // after the columns arrive. Building first and migrating after — which is
+    // what this test used to do — fails with "Missing columns users.role" on a
+    // database that plainly has `users.role`.
+    const adminMigrations = authMigrations({ admin: true });
+    expect(adminMigrations.map((path) => path.split('/').pop())).toContain('20200101000003_kit_auth_admin.sql');
+    for (const file of adminMigrations) {
+      await pool.query(up(file));
+    }
+
     const withAdmin = createAuth({
       db: pool,
       secret: () => 'k'.repeat(48),
@@ -177,10 +214,8 @@ suite('the schema the module ships, against a real Postgres', () => {
       admin: true,
       resolvePrincipal: async (userId) => ({ userId, login: null }),
     });
-    for (const file of withAdmin.migrations) {
-      await pool.query(readFileSync(file, 'utf8'));
-    }
-    expect(withAdmin.migrations.map((path) => path.split('/').pop())).toContain('20200101000003_kit_auth_admin.sql');
+    // What the instance would have applied is what was just applied.
+    expect(withAdmin.migrations).toEqual(adminMigrations);
 
     const response = await withAdmin.handler(
       new Request('http://localhost:3000/api/account/get-session'),
@@ -198,9 +233,80 @@ suite('the schema the module ships, against a real Postgres', () => {
     ]);
   });
 
+  it('rewrites a foreign password hash in the column the rename actually made', async () => {
+    // `email.legacyPassword` is proved next door over the memory adapter, with
+    // a real bcrypt string. What only Postgres can say is that the WRITE lands:
+    // `internalAdapter.updatePassword` matches on `userId`, `providerId` and
+    // `accountId`, and in our schema those three are `user_id`, `provider` and
+    // `provider_id`. A rename that failed to travel would leave the row
+    // untouched and the sign-in still 200 — a bridge that silently never
+    // crosses anybody, which is the one failure the memory adapter cannot see.
+    //
+    // The foreign hash here is a fixed string rather than bcrypt: the kit does
+    // not depend on a hashing library, and what is under test is the rewrite,
+    // not somebody else's algorithm.
+    const legacy = 'legacy$not-a-kit-hash';
+    const asked: string[] = [];
+    const bridged = createAuth<{ userId: string; login: string | null }>({
+      db: pool,
+      secret: () => 'k'.repeat(48),
+      baseUrl: 'http://localhost:3000',
+      cookieName: 'probe_session',
+      secureCookie: false,
+      sessionDays: 7,
+      providers: {},
+      email: {
+        send: async () => {},
+        letters: {
+          magicLink: (link) => ({ subject: 'link', text: link.url }),
+          verifyEmail: (link) => ({ subject: 'verify', text: link.url }),
+          resetPassword: (link) => ({ subject: 'reset', text: link.url }),
+        },
+        password: true,
+        legacyPassword: {
+          verify: async ({ password, hash }) => {
+            asked.push(hash);
+            return hash === legacy && password === 'what-they-typed-in-2019';
+          },
+        },
+      },
+      resolvePrincipal: async (userId) => ({ userId, login: null }),
+    });
+
+    await pool.query('UPDATE users SET email_verified = true');
+    await pool.query(`UPDATE identities SET password = $1 WHERE provider = 'credential'`, [legacy]);
+
+    const signIn = await bridged.instance.api.signInEmail({
+      body: { email: 'pg.user@example.com', password: 'what-they-typed-in-2019' },
+      asResponse: true,
+    });
+    expect(signIn.status).toBe(200);
+    expect(asked).toEqual([legacy]);
+
+    const after = await pool.query<{ password: string }>(
+      `SELECT password FROM identities WHERE provider = 'credential'`,
+    );
+    expect(after.rows[0]!.password.startsWith('scrypt$')).toBe(true);
+
+    // The same password, the same person, one request later — and now it is
+    // the kit's own hash answering. Nobody had to change anything they know.
+    asked.length = 0;
+    const again = await bridged.instance.api.signInEmail({
+      body: { email: 'pg.user@example.com', password: 'what-they-typed-in-2019' },
+      asResponse: true,
+    });
+    expect(again.status).toBe(200);
+    expect(asked).toEqual([]);
+
+    // Restore what the rest of the file expects to find.
+    await pool.query(`UPDATE identities SET password = $1 WHERE provider = 'credential'`, [
+      await hashPassword('a-real-password'),
+    ]);
+  });
+
   it('is idempotent: the migrations apply twice without complaint', async () => {
     for (const file of auth.migrations) {
-      await expect(pool.query(readFileSync(file, 'utf8'))).resolves.toBeDefined();
+      await expect(pool.query(up(file))).resolves.toBeDefined();
     }
     const count = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM users');
     expect(count.rows[0]!.n).toBe('1');

@@ -17,6 +17,7 @@
 export {
   hashPassword,
   verifyPassword,
+  isKitPasswordHash,
   passwordLengthError,
   MIN_PASSWORD,
   MAX_PASSWORD,

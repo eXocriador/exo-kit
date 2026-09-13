@@ -257,8 +257,22 @@ export function enumOf<const V extends readonly [string, ...string[]]>(
 
 // ── anything else ───────────────────────────────────────────────────────────
 
-/** A zod schema whose input is the raw string this module hands it. */
-export type CustomSchema<T> = z.ZodType<T, z.ZodTypeDef, string>;
+/**
+ * A zod schema whose input is the raw string this module hands it.
+ *
+ * Written this way to compile on zod 3 AND zod 4, which is not the same as
+ * being written this way for fun. `ZodType`'s second type parameter means
+ * different things in the two majors — `Def` in 3, `Input` in 4 — and
+ * `ZodTypeDef`, which the zod-3 spelling named there, does not exist in 4 at
+ * all. So the positional parameters are given up (`any`, in both majors) and
+ * the constraint that actually matters is stated directly: `_input` is the
+ * declared input type on `ZodType` in both, so `& { _input: string }` still
+ * turns away a schema expecting an object or a number, which is the only thing
+ * the old three-parameter spelling was buying. `test/env.test.ts` holds both
+ * halves of that — what it accepts and what it refuses — under whichever major
+ * is installed.
+ */
+export type CustomSchema<T> = z.ZodType<T, any, any> & { _input: string };
 
 /**
  * Any zod schema, for the variable the helpers above do not describe — a

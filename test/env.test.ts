@@ -165,6 +165,23 @@ describe('defineEnv', () => {
       .toEqual({ ORIGINS: ['https://a.example', 'https://b.example'] });
   });
 
+  it('custom still refuses a schema that is not reading a string', () => {
+    // The half of `CustomSchema` that has to survive the zod 3 → 4 rewrite of
+    // that type. `defineEnv` hands the schema a raw environment string and
+    // nothing else, so a schema whose input is an object or a number is a
+    // runtime failure the compiler can see coming — and after v0.7.1 the
+    // spelling that catches it is `& { _input: string }` rather than zod 3's
+    // third type parameter. These four lines are the whole regression test for
+    // that swap: they must behave the same under `zod@3.25` and `zod@4`, and
+    // `npm run typecheck` is what runs them.
+    custom(z.string().min(4));
+    custom(z.string().transform((raw) => raw.length));
+    // @ts-expect-error a schema expecting a number never sees one here
+    custom(z.number());
+    // @ts-expect-error a schema expecting an object never sees one here
+    custom(z.object({ a: z.string() }));
+  });
+
   it('an optional field that is set is still validated', () => {
     // "Optional" is about presence, not about correctness: a half-typed
     // POSTGRES_URL must not reach the driver as a working configuration.
