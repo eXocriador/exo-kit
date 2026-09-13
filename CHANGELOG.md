@@ -3,6 +3,47 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.8.0 — 2026-09-13
+
+### ai (new)
+
+**`createAiClient` — the wire to exo-ai, the model service.** Step E2-a of the
+modularity plan. A product asks for a tier (`fast`, `capable`, `agent`) and
+gets back either the answer — with the model, pool and rung that produced it —
+or a typed refusal. `complete()` never throws.
+
+The reason it exists as its own module rather than as a fifth provider under
+`llm`: **the two refusals a product must tell apart are the discriminant of the
+result.** `budget_exhausted` (a daily ceiling closed, `degrade:
+'human_handoff'`) and `all_rungs_failed` (every rung tried, none answered) call
+for opposite actions — a person versus the fail-safe — and `@exo/kit/llm`
+answered both with `null`. A bare 429 or 503 without the service's body is
+`unavailable`, not either of them.
+
+Three things deliberately not in it: **retries** (the service climbs the ladder;
+a client retry would run it again and charge the ceiling twice), a **default or
+fallback model** (the thing the service takes away from products), and
+**`process.env`**. The timeout is per call, over the whole ladder, with a 60 s
+client default — `llm` fixed 30 s for everything. A `subject` over the
+service's 200 characters is refused before sending, because the service would
+truncate it and two subjects sharing the prefix would share one counter.
+`usage()` reads `GET /v1/usage`.
+
+Pulls in nothing; `test/entry-graph.test.ts` pins that.
+
+### infra
+
+`ErrorContext.component` gains `'ai'`. A widening of a closed union: a product
+that switches on it exhaustively gets a compile error, which is the point.
+
+### llm
+
+Unchanged, and not deprecated yet. `createEmbedder` has no replacement — the
+service does not compute embeddings — and exointel still chats through
+`createLlm`. The chat half goes once the last consumer has moved.
+
+Tests: 418 → 441 (+22 `ai`, +1 entry graph); 7 opt-in skipped, as before.
+
 ## v0.7.1 — 2026-09-13
 
 Two requests from consumers, both of which were blocking step E1.
