@@ -3,6 +3,74 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.7.1 — 2026-09-13
+
+Two requests from consumers, both of which were blocking step E1.
+
+### auth
+
+**`email.legacyPassword` — a bridge off somebody else's hash format.** The one
+amendment fixed decision 4 has taken. syncwatch has six live people on bcrypt
+`$2b$10$` and not one address the kit could mail; tyusha has its own on cost 12.
+Both were unable to reach this module at all, because `verify` was sealed inside
+`buildAuthOptions` and everything but `scrypt$` was refused.
+
+```ts
+email: {
+  password: true,
+  legacyPassword: { verify: ({ password, hash }) => bcrypt.compare(password, hash) },
+}
+```
+
+The product's function is asked **only** about a string `scrypt$` does not
+claim, never instead of the native path; a password it accepts is **rewritten**
+into the native format on that same sign-in, so the option empties itself and is
+then deleted; and a throw counts as "no", because these rows are where a
+malformed string survives and one refused password beats everybody's 500.
+`bcryptjs` is a `devDependency` of the kit and nothing more — the kit has no
+opinion about which format a product is leaving.
+
+The rewrite cannot live in `verify`: the library hands that callback two strings
+and no identity, so it cannot write a row. It lives in the module's own `after`
+middleware on `/sign-in/email`, which has the typed password, the identity and
+the adapter at once. Nothing is carried over from `verify` — a sign-in that
+reached a session proves the match, so a row still foreign at that point is one
+the product's reader just accepted. Alternatives weighed (`databaseHooks`,
+`checkPassword`) and the two deliberate silences are in the README, "a password
+hashed before the kit existed".
+
+Proved on a copy of the live syncwatch database with its E1 migration applied:
+six real `$2b$10$` rows in, six `scrypt$` out, second sign-in never reaching the
+product's function.
+
+`@exo/kit/auth-core` gains **`isKitPasswordHash`** — the shape test
+`verifyPassword` already made, named because the bridge needs the same answer
+for a different reason.
+
+**`test/auth-postgres.test.ts` was dead, and is alive.** The opt-in suite
+applied each migration file whole, including the `migrate:down` block added in
+v0.6.x — and ours refuse to roll back by raising, which rolled the whole batch
+back and killed `beforeAll` before one assertion ran. Once it ran, it was also
+racy by construction: it built the instance and migrated afterwards, and Better
+Auth 1.7.4 checks the schema **once and remembers**, so about half of all runs
+failed with `Missing columns users.two_factor_enabled` against a database that
+had the column. Both fixed; ten consecutive green runs. The ordering is a trap
+for products too, and is now written down under "Migrations".
+
+### env
+
+**`zod` may be 3 or 4.** The peer range becomes `^3.25 || ^4`. A peer conflict
+stops `npm ci` from installing the tree at all, so tyusha (on `zod@^4.4.3`) was
+carrying an `overrides` block purely to install the kit; it can drop it.
+
+Not widened blind: the whole suite was run against `zod@4.6.4` and is green on
+both majors. One thing broke, and it is a type rather than a behaviour —
+`CustomSchema<T>`, the argument type of `env.custom()`, spelled `z.ZodTypeDef`
+in `ZodType`'s second slot, and zod 4 removed that type and gave the slot a
+different meaning. It is now `z.ZodType<T, any, any> & { _input: string }`,
+which means the same thing in both majors. `test/env.test.ts` gained the
+compile-time assertions that hold it, so `npm run typecheck` is the check.
+
 ## v0.7.0 — 2026-09-13
 
 ### migrate (new)

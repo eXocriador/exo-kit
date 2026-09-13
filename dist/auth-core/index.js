@@ -14,7 +14,7 @@
  * `node:crypto`, and nothing else at runtime. The Postgres types are type-only
  * imports, erased at build.
  */
-export { hashPassword, verifyPassword, passwordLengthError, MIN_PASSWORD, MAX_PASSWORD, } from './password.js';
+export { hashPassword, verifyPassword, isKitPasswordHash, passwordLengthError, MIN_PASSWORD, MAX_PASSWORD, } from './password.js';
 export { generateTotpSecret, totpUri, verifyTotp, generateRecoveryCodes, recoveryCodeHash, } from './totp.js';
 export { createAuthTokens } from './tokens.js';
 export { createSessionStore } from './sessions.js';

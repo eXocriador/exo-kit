@@ -26,7 +26,14 @@
  *     sign-up that is the ordinary path through the product, not an edge case.
  *  4. **Passwords are `@exo/kit/auth-core/password`** — `scrypt$N$r$p$salt$hash`,
  *     one format across every product, and the hashes exointel already has are
- *     accepted with no reset (sandbox §3.5).
+ *     accepted with no reset (sandbox §3.5). A product arriving with somebody
+ *     ELSE's format (syncwatch and tyusha carry bcrypt) may hand in
+ *     `email.legacyPassword.verify`, and that is a BRIDGE, not a second
+ *     format: the kit asks it only about a string its own format does not
+ *     claim, and the first sign-in it accepts rewrites the row in `scrypt$`.
+ *     The option therefore empties itself, and the product deletes it. See
+ *     "a password hashed before the kit existed" in the README for why the
+ *     rewrite cannot live inside `verify` and what it costs.
  *  5. **`id` is `uuid`.** See the README; the short version is that `text` ids
  *     would have to be paid for by every table that references `users(id)`.
  *  6. **The session cookie cache is off, and `/list-sessions` never leaves the
@@ -137,6 +144,41 @@ export interface AuthEmailOptions {
      * registration endpoint nobody decided on.
      */
     password?: boolean;
+    /**
+     * The product's PREVIOUS hash format, for a database that predates the kit.
+     *
+     * syncwatch has six live people on `$2b$10$` and not one address the kit
+     * could mail — "everybody resets their password" is not a migration there,
+     * it is a locked door. So the kit accepts a second reader, under three rules
+     * that make it a bridge rather than a second supported format:
+     *
+     *  - **Asked only about a string our own format does not claim.** A
+     *    `scrypt$…` row never reaches this function, so a product cannot quietly
+     *    put the whole portfolio back on bcrypt by passing something permissive.
+     *  - **Accepting a password rewrites the row.** The next sign-in for that
+     *    person takes the native path and this function is never called for them
+     *    again — which is the difference between a bridge and permission to live
+     *    on bcrypt forever.
+     *  - **A throw counts as "no".** The rows this reads are exactly where a
+     *    malformed string survives, and one of those must cost its owner a
+     *    refused password, not everybody a 500.
+     *
+     * `bcryptjs` is deliberately NOT a kit dependency: the kit has no opinion on
+     * which format a product is leaving, and the portfolio should not carry a
+     * hashing library for two products and a finite number of logins.
+     *
+     *     legacyPassword: { verify: ({ password, hash }) => bcrypt.compare(password, hash) }
+     *
+     * Requires `password: true`. When every row is rewritten — `select count(*)
+     * from identities where provider = 'credential' and password not like
+     * 'scrypt$%'` is zero — delete the option.
+     */
+    legacyPassword?: {
+        verify(input: {
+            password: string;
+            hash: string;
+        }): boolean | Promise<boolean>;
+    };
 }
 export interface CreateAuthOptions<P> {
     /**

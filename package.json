@@ -1,6 +1,6 @@
 {
   "name": "@exo/kit",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Shared mechanism for small self-hosted services: infra (postgres/redis/json), structured logging, multi-provider LLM client, HTTP responses and rate limiting, session auth primitives and a Better Auth login that cannot be configured out of our policy, health probes, environment schemas, an error-reporting seam, transactional email and escalation notices, support-connector SDK, and the vendoring step that puts a block's SQL migrations where dbmate can read them. Factories only — the kit never reads process.env and never knows a product's name.",
   "license": "MIT",
   "author": "eXocriador",
@@ -101,10 +101,10 @@
   "peerDependencies": {
     "better-auth": "1.7.4",
     "ioredis": ">=5",
+    "pg": ">=8.16",
     "pino": ">=9",
     "postgres": ">=3.4",
-    "zod": "^3.25",
-    "pg": ">=8.16"
+    "zod": "^3.25 || ^4"
   },
   "peerDependenciesMeta": {
     "better-auth": {
@@ -129,6 +129,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pg": "^8.23.1",
+    "bcryptjs": "^3.0.3",
     "better-auth": "^1.7.4",
     "ioredis": "^5.11.0",
     "pg": "^8.16.3",
