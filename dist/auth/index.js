@@ -284,14 +284,21 @@ export function buildAuthOptions(o) {
     return options;
 }
 /**
- * Where the kit's own SQL lives, resolved from this module rather than guessed.
+ * The SQL files this module ships, in the order they must be applied.
+ *
+ * Separate from `createAuth` on purpose, and the first consumer is why: a
+ * migration runner wants nothing but this list, and building a whole auth
+ * instance to read it means handing `betterAuth` a database it will try to
+ * connect to — which fails with `Failed to initialize database adapter` from a
+ * script whose entire job was to read three file names.
  *
  * Both optional files are gated on the option that needs them: a product with
  * no second factor should not carry a `two_factor` table, and the `admin`
  * plugin's four columns on `users` are dead weight — and a lie about what the
- * product does — anywhere it is off.
+ * product does — anywhere it is off. Pass the same flags the product passes to
+ * `createAuth`, or read `auth.migrations`, which is this with them filled in.
  */
-function migrationPaths(options) {
+export function authMigrations(options = {}) {
     const dir = new URL('../../migrations/auth/', import.meta.url);
     const files = [
         '001_kit_auth.sql',
@@ -356,7 +363,7 @@ export function createAuth(o) {
             await instance.api.revokeSession({ headers, body: { token: match.token } });
             return true;
         },
-        migrations: migrationPaths({ totp: o.totp !== undefined, admin: o.admin === true }),
+        migrations: authMigrations({ totp: o.totp !== undefined, admin: o.admin === true }),
         instance,
     };
     kit.fastifyPlugin = createAuthFastifyPlugin({
