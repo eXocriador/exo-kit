@@ -178,6 +178,21 @@ describe('subpath entries and what they import', () => {
     expect([...bareSpecifiers('env/index.ts')].sort()).toEqual(['zod']);
   });
 
+  it('@exo/kit/migrate needs two builtins and no database driver', () => {
+    // It copies files and compares bytes. A driver here would mean the module
+    // had started applying migrations — which is dbmate's job precisely
+    // because dbmate is not a Node program and does not care what the product
+    // is written in.
+    expect([...bareSpecifiers('migrate/index.ts')].sort()).toEqual(['node:fs', 'node:path']);
+  });
+
+  it('the auth migration list reaches nothing — the CLI runs where better-auth may not exist', () => {
+    // `exo-kit-migrations` runs in a product's image build to check the
+    // vendored copies. Importing the list through `auth/index.ts` would make
+    // that gate need a 50 MB peer dependency to read three file names.
+    expect([...bareSpecifiers('auth/migrations.ts')]).toEqual([]);
+  });
+
   it('@exo/kit/infra is the one entry that pulls both drivers', () => {
     // Stated, not lamented: this entry exists to hand out a pool and a cache.
     // The test is here so the line stays true in both directions — an entry

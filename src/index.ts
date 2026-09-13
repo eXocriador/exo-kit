@@ -5,7 +5,7 @@
  * `@exo/kit/log`, `@exo/kit/llm`, `@exo/kit/http`, `@exo/kit/auth-core`,
  * `@exo/kit/auth-core/cookie`, `@exo/kit/health`, `@exo/kit/env`,
  * `@exo/kit/telemetry`, `@exo/kit/mailer`, `@exo/kit/notify`,
- * `@exo/kit/connector-sdk`): importing a
+ * `@exo/kit/migrate`, `@exo/kit/connector-sdk`): importing a
  * subpath pulls in only that module's peer dependencies, so a product that
  * wants a logger does not need a Postgres driver on disk. `test/entry-graph`
  * pins that, because it is a claim a bundler checks and nothing else does.
@@ -61,3 +61,4 @@ export type {
   EscalationNotice,
 } from './notify/index.js';
 export type { ConnectorHandlerOptions } from './connector-sdk/index.js';
+export type { VendoredFile, VendoredState, CheckResult, SyncResult, VendorOptions } from './migrate/index.js';

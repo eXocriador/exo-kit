@@ -441,11 +441,11 @@ describe('what the wrapper refuses to expose', () => {
     // `betterAuth` a database and dies with "Failed to initialize database
     // adapter" in a script that wanted three file names. Found by the first
     // consumer's migration runner, in a deploy.
-    expect(authMigrations().map((path) => path.split('/').pop())).toEqual(['001_kit_auth.sql']);
+    expect(authMigrations().map((path) => path.split('/').pop())).toEqual(['20200101000001_kit_auth.sql']);
     expect(authMigrations({ totp: true, admin: true }).map((path) => path.split('/').pop())).toEqual([
-      '001_kit_auth.sql',
-      '002_kit_auth_2fa.sql',
-      '003_kit_auth_admin.sql',
+      '20200101000001_kit_auth.sql',
+      '20200101000002_kit_auth_2fa.sql',
+      '20200101000003_kit_auth_admin.sql',
     ]);
   });
 
@@ -460,7 +460,7 @@ describe('what the wrapper refuses to expose', () => {
       providers: {},
       resolvePrincipal: async () => null,
     });
-    expect(withoutTotp.migrations.map((path) => path.split('/').pop())).toEqual(['001_kit_auth.sql']);
+    expect(withoutTotp.migrations.map((path) => path.split('/').pop())).toEqual(['20200101000001_kit_auth.sql']);
     const withTotp = createAuth({
       db: memoryAdapter(emptyStore() as unknown as Record<string, Row[]>),
       secret: () => SECRET,
@@ -473,8 +473,8 @@ describe('what the wrapper refuses to expose', () => {
       resolvePrincipal: async () => null,
     });
     expect(withTotp.migrations.map((path) => path.split('/').pop())).toEqual([
-      '001_kit_auth.sql',
-      '002_kit_auth_2fa.sql',
+      '20200101000001_kit_auth.sql',
+      '20200101000002_kit_auth_2fa.sql',
     ]);
   });
 });

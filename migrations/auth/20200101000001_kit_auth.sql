@@ -1,6 +1,7 @@
--- 001_kit_auth.sql — the five tables `@exo/kit/auth` needs, under the names
--- /srv/docs/standards/auth.md fixed: users, identities, sessions, verification.
--- (two_factor is 002, applied only by a product that turns TOTP on.)
+-- 20200101000001_kit_auth.sql — the five tables `@exo/kit/auth` needs, under
+-- the names /srv/docs/standards/auth.md fixed: users, identities, sessions,
+-- verification. (two_factor is the next file, applied only by a product that
+-- turns TOTP on.)
 --
 -- Convergent on purpose. It runs against an empty database AND against a
 -- product that already has auth.md-shaped tables, so every statement is
@@ -20,6 +21,20 @@
 -- columns for it), so this is our decision rather than the library's: every
 -- table that references users(id) in exoanima and exointel already holds a
 -- uuid, and `text` would be paid for by all of them. Reasoning in the README.
+--
+-- Vendored, not read from the package at run time: `exo-kit-migrations sync`
+-- copies this file byte for byte into the consumer's `migrations/kit/`, and
+-- dbmate — a separate container with no Node in it — reads the copy. Edit it
+-- here; a copy edited there is drift, and the consumer's `check` gate fails on
+-- it. Reasoning: README, "Migrations: `@exo/kit/migrate`".
+--
+-- The `20200101` prefix is not a date. dbmate orders by the number in the file
+-- name across every `-d` directory at once, and a kit block has to land before
+-- the product migrations that build on it — including products whose own
+-- migrations are older than this module. It is an ordering floor, and it is
+-- the same in every product, so the version recorded for this file is too.
+
+-- migrate:up
 CREATE TABLE IF NOT EXISTS users (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- Display name, as the provider gives it. Nullable: a magic-link account has none.
@@ -154,3 +169,13 @@ CREATE TABLE IF NOT EXISTS verification (
 );
 CREATE INDEX IF NOT EXISTS verification_identifier_idx ON verification (identifier);
 CREATE INDEX IF NOT EXISTS verification_expires_idx ON verification (expires_at);
+
+-- migrate:down
+-- No rollback, on purpose. This migration is convergent — it runs against an
+-- empty database and against a product that already has these tables — so
+-- "undo" has no single meaning, and every honest guess drops a table that may
+-- hold accounts. dbmate refuses a file without a down block, so the block
+-- exists and refuses instead: `rollback` fails, the schema and the recorded
+-- version both stay. Forward-only is the standard (auth.md); a mistake is
+-- corrected by the next migration, not by walking backwards.
+DO $$ BEGIN RAISE EXCEPTION 'no rollback: 20200101000001_kit_auth'; END $$;

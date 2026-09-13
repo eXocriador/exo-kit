@@ -180,7 +180,7 @@ suite('the schema the module ships, against a real Postgres', () => {
     for (const file of withAdmin.migrations) {
       await pool.query(readFileSync(file, 'utf8'));
     }
-    expect(withAdmin.migrations.map((path) => path.split('/').pop())).toContain('003_kit_auth_admin.sql');
+    expect(withAdmin.migrations.map((path) => path.split('/').pop())).toContain('20200101000003_kit_auth_admin.sql');
 
     const response = await withAdmin.handler(
       new Request('http://localhost:3000/api/account/get-session'),

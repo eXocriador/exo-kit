@@ -58,6 +58,7 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.6.2#subdirectory=python"
 | `@exo/kit/telemetry` | `createTelemetry` — one seam for "something went wrong" | nothing |
 | `@exo/kit/mailer` | `createMailer` — transactional email over Resend; `senderAddress`, `isOwnSender` | nothing |
 | `@exo/kit/notify` | `createTelegramDm`, `createEscalationNotifier` — Telegram first, email as the fallback | nothing |
+| `@exo/kit/migrate` | `syncKitMigrations`, `checkKitMigrations`, `migrationVersion` — put a block's SQL where dbmate can read it, and catch drift | `node:fs`, `node:path` |
 | `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
 Peer dependencies (`better-auth`, `pg`, `postgres`, `ioredis`, `pino`, `zod`) are
@@ -240,9 +241,11 @@ without building anything, and is what a migration runner should use: reading it
 through `createAuth` means handing `betterAuth` a database it will try to
 connect to, and the script dies with `Failed to initialize database adapter`.
 
-The list is SQL file paths, in order, for the product's runner to apply
-**before its own**: `001_kit_auth.sql` always, `002_kit_auth_2fa.sql`
-only with `totp`, `003_kit_auth_admin.sql` only with `admin`. Each one is
+The list is SQL file paths, in order, to be applied **before the product's
+own**: `20200101000001_kit_auth.sql` always, `20200101000002_kit_auth_2fa.sql`
+only with `totp`, `20200101000003_kit_auth_admin.sql` only with `admin`. What
+applies them is dbmate, and how the files get to it is
+[`@exo/kit/migrate`](#migrations-exokitmigrate). Each one is
 convergent — `CREATE TABLE IF NOT EXISTS` for a new product, `ADD COLUMN IF NOT
 EXISTS` for one that already has `auth.md`-shaped tables. What they deliberately
 do not do is change the type of an existing column or move a primary key: that
@@ -259,6 +262,155 @@ Better Auth **encrypts** `two_factor.secret` and the backup codes with the
 application secret, where `auth-core/totp` stored the secret as issued. Strictly
 better — a database dump no longer mints codes — and it means **losing
 `SESSION_SECRET` now loses every second factor**, not just every session.
+
+## Migrations: `@exo/kit/migrate`
+
+Migrations are applied by **dbmate** (`amacneil/dbmate:2.35.1`), a single Go
+binary in its own container — not by a runner in this package. Five products
+had five runners, three of them copies of each other that had already drifted,
+and the sixth product is Python: a runner written in the product's language is
+a runner per language, a container is one per box. The wrapper that calls it is
+`templates/migrate.sh`, copied into each product as `migrate.sh`.
+
+This module is the one part of that which cannot be a shell script.
+
+### The decision: the SQL is vendored, not read from the package
+
+dbmate reads **directories**. The SQL a kit block ships lives inside an npm
+package, and dbmate's container has no Node in it, no `node_modules` mounted,
+and no way to ask what `authMigrations()` would return. Something has to put
+those files where it can see them.
+
+**What we do:** `exo-kit-migrations sync --dir <product>/migrations/kit` copies
+them, byte for byte, into the product's tree, where the product commits them
+like any other file. This is what plan §4.3 describes, and it is the step
+`exo upgrade` will absorb.
+
+**The price, stated plainly:** there are now two copies of the login schema —
+the kit's and the product's — and a stale copy silently applies an old schema.
+That is a real cost and it is why `checkKitMigrations` exists: it compares the
+copies against the installed package byte for byte and names every way they can
+disagree (`missing`, `changed`, `extra`). It runs as a gate in the product's
+image build, where the installed package is the pinned version and drift is
+still cheap to fix. `sync` never deletes a leftover — a file already applied to
+a live database is not garbage, and nothing in this process knows which
+databases exist.
+
+**The alternative we did not take**, and what it would have cost: resolve the
+paths at run time through `authMigrations()`, so there is only ever one copy.
+The B2 session left that argument in `filebrowser`'s runner and it is a good
+one — but dbmate cannot call Node. Honouring it means either a Node runtime on
+the host with the product's `node_modules` installed there (RAM we do not have,
+and a tree that belongs to another user), or a Node bootstrap inside every
+product image to extract the files before dbmate starts. The second works for
+Node products and cannot work for `exopost`, which is Python — and language
+neutrality is the main reason dbmate was chosen at all (plan §4.3). Paying for
+one truth with a mechanism that only half the products can run is the worse
+trade. So: one mechanism everywhere, and a gate against the copy going stale.
+
+### Calling it
+
+```ts
+import { authMigrations } from '@exo/kit/auth';
+import { checkKitMigrations, syncKitMigrations } from '@exo/kit/migrate';
+
+// The flags must mirror what the product passes to `createAuth` — they decide
+// which files exist at all.
+const options = { files: authMigrations({ totp: false }), dir: 'apps/api/migrations/kit' };
+
+syncKitMigrations(options);   // after bumping @exo/kit; commit what it writes
+checkKitMigrations(options);  // in the image build; `{ ok: false }` fails the gate
+```
+
+or, without writing a script, the CLI the package installs:
+
+```
+exo-kit-migrations sync  --dir apps/api/migrations/kit [--totp] [--admin]
+exo-kit-migrations check --dir apps/api/migrations/kit [--totp] [--admin]
+```
+
+`check` exits 1 on any disagreement and writes nothing — a gate that repaired
+what it measured would always pass.
+
+### File names are an ordering floor, not dates
+
+A kit block's files are `20200101…`. That is not the day they were written: it
+is a floor. dbmate orders by the number in the file name **across every `-d`
+directory at once**, and a kit block has to land before the product migrations
+that build on it — including netwatch, whose own first migration is
+`20260828…`, and any product older still. The floor is the same in every
+product, so the version recorded for the file is the same everywhere too.
+
+### Every file needs both markers, and ours refuse to roll back
+
+dbmate 2.35.1 rejects a migration with no `-- migrate:up` **and** one with no
+`-- migrate:down` — at apply time, not at `status`, so a missing marker is
+found by a deploy unless a test finds it first (`test/migrate.test.ts` does).
+
+Our files carry a down block that raises:
+
+```sql
+-- migrate:down
+DO $$ BEGIN RAISE EXCEPTION 'no rollback: 20200101000001_kit_auth'; END $$;
+```
+
+Convergent migrations have no single meaning for "undo" — the same file may
+have created a table or added a column to one that was already there — and
+every honest guess drops something with accounts in it. So `rollback` fails
+loudly, the schema and the recorded version both survive (verified: the
+exception aborts dbmate's transaction, exit code 2), and forward-only stays the
+standard. A migration written from scratch for a product may of course carry a
+real `down`.
+
+### Moving a live database onto dbmate
+
+Our runners recorded the **file name**; dbmate records the **version**, the
+digits the name starts with. So an existing product is a rename plus a
+hand-written seed, and without the seed dbmate re-applies the whole history to
+a live database.
+
+1. Rename each `NNN_name.sql` to `<timestamp>_name.sql`, taking the timestamp
+   from `applied_at` of the real run (`SELECT filename, applied_at FROM
+   schema_migrations`), so the new order is the order that actually happened.
+   Kit files keep the floor version above instead — it is the file's name in
+   every product.
+2. Add `-- migrate:up` / `-- migrate:down` to each.
+3. Then, in one transaction:
+
+```sql
+BEGIN;
+CREATE TABLE schema_migrations_pre_dbmate AS SELECT * FROM schema_migrations;
+DROP TABLE schema_migrations;
+CREATE TABLE schema_migrations (version character varying NOT NULL PRIMARY KEY);
+INSERT INTO schema_migrations (version) VALUES ('20200101000001'), ('20260912080138');
+COMMIT;
+```
+
+`DROP`, not `ALTER`: dbmate's table is `version varchar PRIMARY KEY` and the
+old one is `(filename, applied_at)`. Left in place it is not ignored — dbmate
+fails with `pq: column "version" does not exist` before doing anything, which
+is at least loud.
+
+**The proof of a transition is `dbmate status` against the live database**:
+`Pending: 0`, every historical migration marked `[X]`, nothing re-applied. Not
+a runner's log — the status output.
+
+### The five traps in `migrate.sh`
+
+Proven by running them (audit `2026-09-12-auth-sandbox.md` §4), each one worth
+a broken deploy:
+
+1. **Only `DATABASE_URL`.** Our canonical name is `POSTGRES_URL`, so
+   `--env-file .env` alone does nothing — the wrapper translates the name.
+2. **`?sslmode=disable` is required**, or `pq: SSL is not enabled on the server`.
+3. **`--no-dump-schema` is required**, or dbmate writes `db/schema.sql` into
+   the mounted directory — a silent edit of the product's tree. The wrapper
+   mounts `:ro` as well.
+4. **On failure dbmate prints `Applied: … in 11.17ms` first and `Error:`
+   after.** The output cannot be read; only the exit code can.
+5. **The accounting key is the timestamp in the name, not the name.** Two
+   directories via `-d` twice work, and the order is by timestamp across both
+   — not "this directory, then that one".
 
 ## Using it
 
