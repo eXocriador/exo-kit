@@ -22,7 +22,7 @@ copies become the same file.
 ## Install
 
 ```bash
-npm i github:eXocriador/exo-kit#v0.5.1
+npm i github:eXocriador/exo-kit#v0.6.0
 ```
 
 `dist/` is committed, so `npm ci` inside a Docker build does not compile
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 Python:
 
 ```bash
-uv add "git+https://github.com/eXocriador/exo-kit@v0.5.1#subdirectory=python"
+uv add "git+https://github.com/eXocriador/exo-kit@v0.6.0#subdirectory=python"
 ```
 
 ## Modules
@@ -52,6 +52,7 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.5.1#subdirectory=python"
 | `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
+| `@exo/kit/auth` | `createAuth` — the whole login: providers, magic link, TOTP, cabinet, admin | `better-auth`, `pg` |
 | `@exo/kit/health` | `createHealth` — `live()` / `ready()` as Web-standard responses | nothing |
 | `@exo/kit/env` | `defineEnv`, `renderEnvExample` — one schema per product | `zod` |
 | `@exo/kit/telemetry` | `createTelemetry` — one seam for "something went wrong" | nothing |
@@ -59,7 +60,8 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.5.1#subdirectory=python"
 | `@exo/kit/notify` | `createTelegramDm`, `createEscalationNotifier` — Telegram first, email as the fallback | nothing |
 | `@exo/kit/connector-sdk` | `createConnectorHandler` — HMAC-signed support connector | `node:crypto` |
 
-Peer dependencies (`postgres`, `ioredis`, `pino`, `zod`) are optional, and the right
+Peer dependencies (`better-auth`, `pg`, `postgres`, `ioredis`, `pino`, `zod`) are
+optional, and the right
 column is the reason to care which subpath you reach for. `@exo/kit/infra` is a
 barrel over a pool and a cache, so importing it walks into both drivers — take
 the JSON helpers from `@exo/kit/json`, which imports nothing at all. They are
@@ -74,6 +76,164 @@ sharper reason. An edge proxy verifies a session cookie's signature and has no
 TOTP would not bloat a bundle — it would fail to build. The cookie half uses Web
 Crypto and imports nothing; the barrel does not re-export it, and a test says so
 out loud rather than a comment asking nicely.
+
+`@exo/kit/auth` is the one row in that table where the dependency column is a
+warning rather than a promise. It pulls `better-auth` in: 50 MB on disk, 86
+packages, about 1.5 s added to start-up and 80 MB of RSS. A product that only
+needs to hash a password or verify a cookie must keep using `auth-core`, which
+costs `node:crypto` and nothing else.
+
+## The login: `@exo/kit/auth`
+
+It exists to make one sentence true: **the login policy is not something a
+product can get wrong.** Better Auth can express our policy and can also express
+its exact opposite, with one list left non-empty — so the decisions below are
+fixed in the wrapper and are not parameters, and a product passes in only what
+is genuinely its own.
+
+```ts
+// src/auth.ts
+import { createAuth, createAuthRateLimitStorage } from '@exo/kit/auth';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: env.postgresUrl, max: 5 });
+
+export const auth = createAuth<Principal>({
+  db: pool,
+  secret: () => env.sessionSecret,
+  baseUrl: env.siteUrl,
+  cookieName: 'alpha_session',
+  secureCookie: env.secureCookie,
+  sessionDays: 30,
+  trustedProxies: env.trustedProxies,        // every product is behind Traefik
+  providers: {},                             // empty is a working state
+  email: {
+    send: (to, subject, text) => mailer.send({ to, subject, text }),
+    letters: { magicLink: (url, minutes) => loginEmail(url, minutes) },
+    perAddressLimit: { max: 3, windowMs: 15 * 60_000 },
+  },
+  rateLimitStorage: createAuthRateLimitStorage({ redis: redis.client }),
+  resolvePrincipal: (userId) => principalOf(userId),
+});
+
+app.register(auth.fastifyPlugin);
+```
+
+### What it fixes, and will not let a product change
+
+1. **`accountLinking = { enabled: true, trustedProviders: [], requireLocalEmailVerified: true }`.**
+   Two logins become one account only when the address is verified on **both**
+   sides. `trustedProviders` is not exposed, because a provider named there
+   *skips* the incoming `emailVerified` check — the list weakens the policy
+   rather than expressing it, which is the opposite of how it reads.
+   `test/auth-linking.test.ts` holds all four cases plus that one.
+2. **`basePath: '/api/account'`**, cookie `httpOnly + sameSite=lax + path=/`,
+   and `secure` from an explicit flag — never guessed from the URL. The
+   `cookieName` also becomes the prefix for every other cookie, so the
+   two-factor and session-data cookies are not called `better-auth.*`.
+3. **Email verification at sign-up whenever a password exists beside a magic
+   link.** Not tidiness — see "the magic link" below. Configuring a password
+   without verification letters throws at construction.
+4. **Passwords are `@exo/kit/auth-core/password`** — one `scrypt$N$r$p$salt$hash`
+   format across the portfolio, and the hashes exointel already has are accepted
+   with no reset.
+5. **`id` is `uuid`.** See below.
+6. **The session cookie cache is off, and `/list-sessions` never leaves the
+   process.** The library answers that route with each session's raw `token` —
+   the caller's own, so not a leak, but one XSS on a cabinet page then hands over
+   every device instead of one. The route is in `disabledPaths`; `listSessions()`
+   answers it without tokens and `revokeSession()` takes an **id**.
+7. **Fastify is mounted as an encapsulated plugin.** The raw-body parser Better
+   Auth's docs tell you to add globally turns every product JSON route's body
+   into a string, and nothing in the resulting `zod` failures points at the
+   cause.
+
+What stays the product's: the shape of its principal and the query behind it,
+its `ADMIN_EMAIL` rule, the text of its letters, its `/api/account/health`, and
+the page with the provider buttons.
+
+### Why `id` is `uuid` and not `text`
+
+Better Auth generates either — `advanced.database.generateId: 'uuid'` is a
+first-class mode and its own generator emits `uuid` columns for it — so this is
+our decision, not the library's. The cost of `text` is not a row migration;
+`users.id` is referenced by five other tables in exoanima and seven in exointel,
+and every one of those columns would have to change type with it. `uuid` is also
+what `gen_random_uuid()` already put in those rows, so an existing set stays
+valid untouched. A new product pays nothing either way.
+
+### Three things the schema changes about `auth.md`
+
+* **`users.email` is now UNIQUE** (on `lower(email)`). The standard used to say
+  "if in doubt, a second account"; the library cannot express that and refuses
+  the login instead. Same safety property, different experience.
+* **`UNIQUE (provider, provider_id)` is ours.** `auth@1.7.4 generate` emits only
+  an index on `userId`, so two tabs finishing one login at the same moment would
+  write two identity rows. The migration supplies the key.
+* **`verification.value` is the token as issued**, where the products' own
+  `login_tokens` stored a SHA-256. A dump of that table is live credentials
+  until the rows expire.
+
+### The magic link deletes passwords, and that is deliberate
+
+A magic link into a row with `email_verified = false` **deletes that row's
+password and every OAuth link it had**, then marks the address verified. It is
+not a bug: it is the fix for `GHSA-qq9h-g4jm-xgf3`, and it says the proven owner
+of a mailbox inherits nothing that predates the proof. The consequence is fixed
+decision 3 — without verification at sign-up, a person who registers with a
+password and then clicks a login link loses that password permanently and
+silently. `test/auth-wrapper.test.ts` pins the behaviour so it cannot change
+under us unnoticed.
+
+### Two ceilings, counting different things
+
+Better Auth's limiter counts **IP + path**; `createAuthRateLimitStorage` serves
+it over Redis so a restart hands nobody a fresh budget. The address ceiling
+counts **the recipient of the letter**, and it does not follow from the first:
+behind Traefik the socket address is identical for everyone, and an IP ceiling
+does not protect a stranger's mailbox from whoever is willing to change IP. Keep
+both.
+
+### Upgrading `better-auth`
+
+The version is pinned **exactly** (`"better-auth": "1.7.4"`, no caret), and that
+is not caution for its own sake: twenty advisories in a year, two of them the
+very holes `auth.md` closed by design. The merge policy now lives in somebody
+else's release rather than in our SQL, so `test/auth-linking.test.ts` is the
+replacement for the `WHERE email_verified = true` that used to carry it.
+
+**On every version bump: run the auth tests and read the advisories.** Two of
+them need a real database and are skipped without one —
+
+```bash
+KIT_TEST_POSTGRES_URL=postgres://…/scratch npx vitest run test/auth-postgres.test.ts
+```
+
+— and they are the only tests that can see a schema mismatch, which is how the
+plugin-field rename bug was found: `options.user.fields` does not reach a field a
+*plugin* declares, so `twoFactor` and `admin` carry their own rename.
+
+### Migrations
+
+`auth.migrations` is a list of SQL file paths, in order, for the product's runner
+to apply **before its own**: `001_kit_auth.sql` always, `002_kit_auth_2fa.sql`
+only with `totp`, `003_kit_auth_admin.sql` only with `admin`. Each one is
+convergent — `CREATE TABLE IF NOT EXISTS` for a new product, `ADD COLUMN IF NOT
+EXISTS` for one that already has `auth.md`-shaped tables. What they deliberately
+do not do is change the type of an existing column or move a primary key: that
+needs to know how many rows are in the table, and only the product knows that.
+
+Enabling `admin` is worth a thought rather than a reflex. Its gate is
+`users.role = 'admin'`, a row in the database — so a product whose admin is
+decided another way (filebrowser matches a verified address against
+`ADMIN_EMAIL`) gains fifteen routes its only admin can never pass.
+
+### Turning TOTP on costs the secret
+
+Better Auth **encrypts** `two_factor.secret` and the backup codes with the
+application secret, where `auth-core/totp` stored the secret as issued. Strictly
+better — a database dump no longer mints codes — and it means **losing
+`SESSION_SECRET` now loses every second factor**, not just every session.
 
 ## Using it
 

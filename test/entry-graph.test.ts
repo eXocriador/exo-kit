@@ -120,6 +120,30 @@ describe('subpath entries and what they import', () => {
     expect(barrel).not.toMatch(/from '\.\/cookie\.js'/);
   });
 
+  it('@exo/kit/auth is the one entry that pulls a framework-sized package in', () => {
+    // Every other row in this file is about keeping a dependency OUT. This one
+    // is the opposite: it writes down what a product pays for the login, so the
+    // cost stays visible and so nobody mounts it from a client bundle. 50 MB,
+    // 86 packages, ~1.5 s added to start-up and ~80 MB of RSS (sandbox §3.10).
+    //
+    // It must not reach a database driver: the product passes its own `pg` Pool
+    // in, and `postgres`/`ioredis` appearing here would mean the module had
+    // started opening connections of its own.
+    const specs = bareSpecifiers('auth/index.ts');
+    expect([...specs].sort()).toEqual([
+      'better-auth',
+      'better-auth/api',
+      'better-auth/plugins/admin',
+      'better-auth/plugins/custom-session',
+      'better-auth/plugins/magic-link',
+      'better-auth/plugins/two-factor',
+      'node:crypto',
+    ]);
+    expect(specs.has('postgres')).toBe(false);
+    expect(specs.has('ioredis')).toBe(false);
+    expect(specs.has('pg')).toBe(false);
+  });
+
   it('@exo/kit/mailer reaches no package at all', () => {
     // One HTTPS call with the global `fetch`. A product that only wants to
     // know whether email is configured should not pay for anything else, and
