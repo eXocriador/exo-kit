@@ -108,8 +108,8 @@ export function buildAuthOptions(o) {
     if (email) {
         plugins.push(magicLink({
             expiresIn: linkMinutes * 60,
-            sendMagicLink: async ({ email: to, url }) => {
-                const letter = email.letters.magicLink(url, linkMinutes);
+            sendMagicLink: async ({ email: to, url, token }) => {
+                const letter = email.letters.magicLink({ url, token }, linkMinutes);
                 await email.send(to, letter.subject, letter.text);
             },
         }));
@@ -200,8 +200,8 @@ export function buildAuthOptions(o) {
                 // FIXED 4 — one hash format across the portfolio, and exointel's
                 // live rows are accepted as they stand.
                 password: { hash: hashPassword, verify: ({ hash, password }) => verifyPassword(password, hash) },
-                sendResetPassword: async ({ user, url }) => {
-                    const letter = email.letters.resetPassword(url, linkMinutes);
+                sendResetPassword: async ({ user, url, token }) => {
+                    const letter = email.letters.resetPassword({ url, token }, linkMinutes);
                     await email.send(user.email, letter.subject, letter.text);
                 },
             }
@@ -211,8 +211,8 @@ export function buildAuthOptions(o) {
                 emailVerification: {
                     sendOnSignUp: true,
                     autoSignInAfterVerification: false,
-                    sendVerificationEmail: async ({ user, url }) => {
-                        const letter = email.letters.verifyEmail(url, linkMinutes);
+                    sendVerificationEmail: async ({ user, url, token }) => {
+                        const letter = email.letters.verifyEmail({ url, token }, linkMinutes);
                         await email.send(user.email, letter.subject, letter.text);
                     },
                 },
@@ -266,10 +266,6 @@ export function buildAuthOptions(o) {
                             code: 'TOO_MANY_REQUESTS',
                         });
                     }
-                }
-                if (o.hooks?.beforeLink && ctx.path.startsWith('/callback/')) {
-                    const provider = ctx.path.slice('/callback/'.length);
-                    await o.hooks.beforeLink({ provider, email: null, emailVerified: false });
                 }
             }),
             after: o.hooks?.afterSignIn

@@ -92,11 +92,30 @@ export interface AuthEmailOptions {
      * portfolio is how they drift.
      */
     letters: {
-        magicLink(url: string, minutes: number): AuthLetter;
+        /**
+         * `link.url` goes straight to `/magic-link/verify`, which consumes the
+         * token on a GET. **`link.token` is here because that is sometimes the
+         * wrong thing to put in a letter:** mail scanners and link previewers
+         * follow URLs before a person does, and a one-time link they burn makes the
+         * login fail silently for the person who asked for it. A product that cares
+         * builds its own `…/login?token=<token>` pointing at a page whose BUTTON
+         * navigates to the verify route — the scanner then fetches a static page
+         * and nothing is spent. filebrowser does exactly that.
+         */
+        magicLink(link: {
+            url: string;
+            token: string;
+        }, minutes: number): AuthLetter;
         /** Required when `password` is on — sign-up sends this before a session exists. */
-        verifyEmail?(url: string, minutes: number): AuthLetter;
+        verifyEmail?(link: {
+            url: string;
+            token: string;
+        }, minutes: number): AuthLetter;
         /** Required when `password` is on. */
-        resetPassword?(url: string, minutes: number): AuthLetter;
+        resetPassword?(link: {
+            url: string;
+            token: string;
+        }, minutes: number): AuthLetter;
     };
     /** How long a link lives. Default 15 minutes — on its own life it equals a password. */
     linkMinutes?: number;
@@ -177,13 +196,17 @@ export interface CreateAuthOptions<P> {
      * `customSession`, so `/get-session` and `getPrincipal` answer identically.
      */
     resolvePrincipal(userId: string, session: AuthSession): Promise<P | null>;
+    /**
+     * `afterSignIn` is the one hook here, and the one auth.md asks for that is
+     * NOT reproduced is worth naming: the standard puts the provider's name
+     * inside the `state` value (`"<provider>.<nonce>"`) so a code from one path
+     * cannot be presented on another "before the network". Better Auth does not,
+     * and does something stronger instead — the state is written to BOTH a row
+     * and a signed cookie, both are compared on return, and the row is deleted on
+     * use. The prefix only ever added an earlier failure for an exchange that
+     * could not have succeeded anyway, so it is dropped rather than rebuilt.
+     */
     hooks?: {
-        /** Called before an OAuth identity is attached. Throw to refuse. */
-        beforeLink?(info: {
-            provider: string;
-            email: string | null;
-            emailVerified: boolean;
-        }): Promise<void>;
         afterSignIn?(info: {
             userId: string;
             provider: string | null;
