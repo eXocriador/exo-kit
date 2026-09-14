@@ -30,6 +30,24 @@ hash too. `revokeOwnedSession` and `revokeOtherSessions` take that stored form;
 stored hashed since v0.9.0", has both and the window between them. Proven on a
 copy of netwatch's live database (3 rows), not only by a test.
 
+**B. A revocation says whether it happened** (§10, block «netwatch: хвіст
+аудиту …», N-11 and the request under N-24). `revokeUserSessions`,
+`revokeOtherSessions` and `revokeSession` answer `RevokeResult` —
+`{ ok: true, revoked: n }` or `{ ok: false }` — and `invalidateUserCache`
+answers `InvalidateResult` (`invalidated: n`). They used to answer `void`, and
+`ids ?? []` read a DELETE that threw as "nothing to delete", which is how
+netwatch could tell an administrator `sessionsRevoked: true` about sessions that
+were still live. **Compatible:** `void` → a value breaks no caller that ignored
+it. `query`'s `null` is what tells the branches apart — every callback here
+returns a row list, which is an array even when empty — so `SessionStoreConfig`
+does not grow a `tryQuery`. `revokeSession` was not in the request and has the
+same shape, so it moved too.
+
+Not moved, deliberately: `revokeOwnedSession` still answers `boolean`, so its
+`false` still covers "not yours" and "no database". An object there would be
+truthy in exointel's `if (match && (await revokeOwnedSession(…)))` and turn
+every refusal into a success — the opposite of this entry.
+
 ### auth
 
 **C. The magic link's row is a hash** (§10, block «Модульність, B2, споживач 2:

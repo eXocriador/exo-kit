@@ -33,6 +33,8 @@ export { createAuthTokens } from './tokens.js';
 export type { AuthTokens, AuthTokensConfig } from './tokens.js';
 export { createSessionStore, sessionIdHash } from './sessions.js';
 export type {
+  RevokeResult,
+  InvalidateResult,
   SessionStore,
   SessionStoreConfig,
   SessionCache,

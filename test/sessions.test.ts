@@ -357,6 +357,72 @@ describe('session revocation — the row dies before the cache key', () => {
   });
 });
 
+/**
+ * netwatch N-11: `revokeUserSessions` answered `void`, and `ids ?? []` read a
+ * DELETE that threw as "nothing to delete" — so an admin route said
+ * `sessionsRevoked: true` about sessions that were still live. Every path that
+ * can fail silently now says which of the two happened, and these tests hold
+ * both branches apart: zero rows is an answer, a dead database is not.
+ */
+describe('a revocation says whether it happened', () => {
+  /** The runner as `createDb` builds it: the callback's throw becomes `null`. */
+  function dbThrows() {
+    query.mockImplementationOnce(async (fn: (sql: unknown) => unknown) => {
+      try {
+        return await fn(() => Promise.reject(new Error('connection terminated')));
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  it('revokeUserSessions counts what it revoked', async () => {
+    dbReturns([{ id: 'a' }, { id: 'b' }]);
+    expect(await store().revokeUserSessions('u1')).toEqual({ ok: true, revoked: 2 });
+  });
+
+  it('revokeUserSessions: nothing to revoke is ok, with zero', async () => {
+    dbReturns([]);
+    expect(await store().revokeUserSessions('u1')).toEqual({ ok: true, revoked: 0 });
+  });
+
+  it('revokeUserSessions: a DELETE that threw is NOT ok — and clears no cache key it never read', async () => {
+    dbThrows();
+    expect(await store().revokeUserSessions('u1')).toEqual({ ok: false });
+    expect(cacheDel).not.toHaveBeenCalled();
+  });
+
+  it('revokeUserSessions: no database at all is not ok either', async () => {
+    query.mockResolvedValueOnce(null);
+    expect(await store().revokeUserSessions('u1')).toEqual({ ok: false });
+  });
+
+  it('revokeOtherSessions: both branches', async () => {
+    dbReturns([{ id: 'b' }]);
+    expect(await store().revokeOtherSessions('u1', 'a')).toEqual({ ok: true, revoked: 1 });
+    dbThrows();
+    expect(await store().revokeOtherSessions('u1', 'a')).toEqual({ ok: false });
+  });
+
+  it('revokeSession: both branches, and the key is cleared on either', async () => {
+    dbReturns([{ id: S1 }]);
+    expect(await store().revokeSession('s1')).toEqual({ ok: true, revoked: 1 });
+    dbReturns([]);
+    expect(await store().revokeSession('s1')).toEqual({ ok: true, revoked: 0 });
+    cacheDel.mockClear();
+    dbThrows();
+    expect(await store().revokeSession('s1')).toEqual({ ok: false });
+    expect(cacheDel).toHaveBeenCalledWith(`session:${S1}`);
+  });
+
+  it('invalidateUserCache: both branches', async () => {
+    dbReturns([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+    expect(await store().invalidateUserCache('u1')).toEqual({ ok: true, invalidated: 3 });
+    dbThrows();
+    expect(await store().invalidateUserCache('u1')).toEqual({ ok: false });
+  });
+});
+
 describe('the authorization model belongs to the product', () => {
   it('names no column beyond the session table it owns', async () => {
     const source = await import('node:fs')

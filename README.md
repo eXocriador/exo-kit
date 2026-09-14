@@ -821,6 +821,25 @@ principal of the same user whose `sessionId` is the hash. All three sessions had
 already lapsed, so the copy — only the copy — had `expires_at` moved an hour
 ahead first; without that the resolver's expiry predicate is all a run proves.
 
+### A revocation says whether it happened
+
+`revokeUserSessions`, `revokeOtherSessions` and `revokeSession` answer
+`{ ok: true, revoked }` or `{ ok: false }`; `invalidateUserCache` answers
+`{ ok: true, invalidated }` or `{ ok: false }`. Zero is an answer — the database
+replied and there was nothing to do. `ok: false` is the database not replying,
+and then nothing was revoked, not even from the cache: the ids were never read.
+A route that reports the result to a person must read it:
+
+```ts
+const revoked = await revokeUserSessions(id);
+if (!revoked.ok) return apiError('Database unavailable — sessions were NOT revoked', 503);
+return apiOk({ ok: true, sessionsRevoked: true });
+```
+
+`revokeOwnedSession` still answers a `boolean`, and its `false` still means
+either "not this user's" or "no database": an object in its place would be
+truthy in every `if (await revokeOwnedSession(…))` that exists.
+
 ### Not configured is a state
 
 `createDb({ url: null })` and `createRedis({ url: null })` return working

@@ -27,6 +27,17 @@ import type { Sql } from 'postgres';
  * the table. `test/sessions.test.ts` holds the raw id away from `sql` and the
  * cache on every path.
  *
+ * ── A revocation says whether it happened ──
+ * Before v0.9.0 the bulk paths answered `void`, and `ids ?? []` turned "the
+ * DELETE threw" into "there was nothing to delete" — so a product could tell an
+ * administrator `sessionsRevoked: true` about sessions that were still live
+ * (netwatch N-11). They now answer {@link RevokeResult}. `query`'s `null` is
+ * enough to tell the two apart HERE, and only here: every callback below
+ * returns postgres.js's row list, which is an array even when nothing matched,
+ * so `null` can only mean the statement threw or there is no database. That is
+ * the case `tryQuery` exists for elsewhere; this module does not need the second
+ * runner, and taking it would have changed `SessionStoreConfig`.
+ *
  * ── Why the principal arrives as a resolver ──
  * This is the one place the two copies genuinely disagreed, and not
  * cosmetically. One resolves a principal carrying a subscription plan and a
@@ -65,6 +76,20 @@ export function sessionIdHash(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
 }
 
+/**
+ * What a revocation did.
+ *
+ * `{ ok: true, revoked: 0 }` — the database answered and there was nothing to
+ * revoke. `{ ok: false }` — the database did not answer (the statement threw,
+ * or there is none), and NOTHING was revoked: not the rows, and not the cached
+ * principals either, because their ids were never read. A caller that reports
+ * "signed out everywhere" on `ok: false` is reporting something false.
+ */
+export type RevokeResult = { ok: true; revoked: number } | { ok: false };
+
+/** What {@link SessionStore.invalidateUserCache} did — the same two outcomes. */
+export type InvalidateResult = { ok: true; invalidated: number } | { ok: false };
+
 export interface SessionMeta {
   ip?: string;
   userAgent?: string;
@@ -87,7 +112,7 @@ export interface SessionCache {
 }
 
 export interface SessionStoreConfig<P> {
-  /** The product's query runner — `query` from `createDb`. */
+  /** The product's query runner — `query` from `createDb`. `null` means it threw or there is no database. */
   query<T>(fn: (sql: Sql) => Promise<T>): Promise<T | null>;
   /** Where resolved principals are cached between database reads. */
   cache: SessionCache;
@@ -117,16 +142,22 @@ export interface SessionStore<P> {
   resolveSession(rawSessionId: string): Promise<P | null>;
   /** A user's live sessions, newest first — for a "signed-in devices" view. Ids are the stored form. */
   listUserSessions(userId: string): Promise<SessionInfo[]>;
-  /** Revoke one session that belongs to `userId`, by its STORED id (`SessionInfo.id`). Ownership-scoped. */
+  /**
+   * Revoke one session that belongs to `userId`, by its STORED id
+   * (`SessionInfo.id`). Ownership-scoped. `false` covers both "not yours or
+   * not there" and "the database did not answer" — the boolean predates
+   * {@link RevokeResult}, and an object in its place would be truthy in every
+   * `if (await revokeOwnedSession(…))` a product already has.
+   */
   revokeOwnedSession(userId: string, storedId: string): Promise<boolean>;
   /** Revoke every session for a user except one, given by its STORED id (the principal's, the listing's). */
-  revokeOtherSessions(userId: string, keepStoredId: string): Promise<void>;
+  revokeOtherSessions(userId: string, keepStoredId: string): Promise<RevokeResult>;
   /** Revoke a single session (logout), by the RAW id from the cookie. */
-  revokeSession(rawSessionId: string): Promise<void>;
-  /** Revoke every session for a user. */
-  revokeUserSessions(userId: string): Promise<void>;
+  revokeSession(rawSessionId: string): Promise<RevokeResult>;
+  /** Revoke every session for a user. `ok: false` means none were — see {@link RevokeResult}. */
+  revokeUserSessions(userId: string): Promise<RevokeResult>;
   /** Drop cached principals for a user WITHOUT logging them out. */
-  invalidateUserCache(userId: string): Promise<void>;
+  invalidateUserCache(userId: string): Promise<InvalidateResult>;
   /** The stored form of a raw id — {@link sessionIdHash}, here for symmetry with `AuthTokens.tokenHash`. */
   sessionIdHash(raw: string): string;
   /** The configured session lifetime, for a caller setting a cookie's Max-Age. */
@@ -207,6 +238,17 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
   }
 
   /**
+   * Clear the cache key of every row a statement returned, and say how many.
+   * `null` rows is the database not answering — nothing to clear, because no id
+   * was read — and is passed on as `ok: false` rather than as zero.
+   */
+  async function clearReturned(rows: ReadonlyArray<Record<string, unknown>> | null): Promise<number | null> {
+    if (rows === null) return null;
+    for (const r of rows) await cacheDel(cacheKey(r.id as string));
+    return rows.length;
+  }
+
+  /**
    * Revoke every session for a user EXCEPT one (used after a password change to
    * keep the current device signed in but log out all others).
    *
@@ -215,25 +257,28 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
    * matches no row, so the current device is signed out with the rest: the
    * mistake fails closed, and it is still a mistake.
    */
-  async function revokeOtherSessions(userId: string, keepStoredId: string): Promise<void> {
+  async function revokeOtherSessions(userId: string, keepStoredId: string): Promise<RevokeResult> {
     const ids = await query(async (sql) => {
       return await sql`
         DELETE FROM sessions
         WHERE user_id = ${userId}::uuid AND id <> ${keepStoredId}
         RETURNING id`;
     });
-    for (const r of ids ?? []) await cacheDel(cacheKey(r.id as string));
+    const revoked = await clearReturned(ids);
+    return revoked === null ? { ok: false } : { ok: true, revoked };
   }
 
   /** Row first, then the cache entry — see `revokeUserSessions` for why the
-   *  order is load-bearing. */
-  async function revokeSession(rawSessionId: string): Promise<void> {
+   *  order is load-bearing. The key is cleared even when the database did not
+   *  answer: it is known without reading anything, and a cached principal is
+   *  the one part of the session that can still be taken away. */
+  async function revokeSession(rawSessionId: string): Promise<RevokeResult> {
     const storedId = sessionIdHash(rawSessionId);
-    await query(async (sql) => {
-      await sql`DELETE FROM sessions WHERE id = ${storedId}`;
-      return true;
+    const rows = await query(async (sql) => {
+      return await sql`DELETE FROM sessions WHERE id = ${storedId} RETURNING id`;
     });
     await cacheDel(cacheKey(storedId));
+    return rows === null ? { ok: false } : { ok: true, revoked: rows.length };
   }
 
   /**
@@ -252,28 +297,36 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
    * the cache keys, and a separate SELECT-then-DELETE would reopen the gap it
    * closes.
    *
+   * `{ ok: false }` when the DELETE did not run. The caller must not then say
+   * the sessions are gone — that is exactly what the old `void` let it say.
+   *
    * Residual, deliberately accepted: while a cache breaker is open, `cacheDel`
    * no-ops and an already-cached principal outlives revocation until its TTL.
    * That is bounded and only during an outage, whereas the ordering bug applied
    * on every healthy call.
    */
-  async function revokeUserSessions(userId: string): Promise<void> {
+  async function revokeUserSessions(userId: string): Promise<RevokeResult> {
     const ids = await query(async (sql) => {
       return await sql`DELETE FROM sessions WHERE user_id = ${userId}::uuid RETURNING id`;
     });
-    for (const r of ids ?? []) await cacheDel(cacheKey(r.id as string));
+    const revoked = await clearReturned(ids);
+    return revoked === null ? { ok: false } : { ok: true, revoked };
   }
 
   /**
    * Drop the cached principal for every live session of a user WITHOUT logging
    * them out. Used when an admin changes a role or a grant: the user stays
    * signed in but their next request re-resolves from Postgres.
+   *
+   * `{ ok: false }` means the old principals are still cached for up to the
+   * cache lifetime — a role just taken away still works for that long.
    */
-  async function invalidateUserCache(userId: string): Promise<void> {
+  async function invalidateUserCache(userId: string): Promise<InvalidateResult> {
     const ids = await query(async (sql) => {
       return await sql`SELECT id FROM sessions WHERE user_id = ${userId}::uuid`;
     });
-    for (const r of ids ?? []) await cacheDel(cacheKey(r.id as string));
+    const invalidated = await clearReturned(ids);
+    return invalidated === null ? { ok: false } : { ok: true, invalidated };
   }
 
   return {
