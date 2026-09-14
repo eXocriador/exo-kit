@@ -23,7 +23,7 @@ export { createDb } from './db.js';
 export type { Db, DbConfig, DbOutcome } from './db.js';
 export { createRedis } from './redis.js';
 export type { RedisCache, RedisConfig } from './redis.js';
-export type { ErrorContext, ReportError } from './types.js';
+export type { ErrorContext, KitComponent, ReportError } from './types.js';
 export {
   isRecord,
   asArray,

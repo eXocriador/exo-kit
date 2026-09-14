@@ -201,6 +201,98 @@ describe('defineEnv', () => {
   });
 });
 
+/**
+ * B1 (§10): filebrowser wrote its own `pair()` for half a provider key pair,
+ * netwatch checked a mode-dependent `SESSION_SECRET` in `instrumentation.ts`.
+ * Two consumers, one shape — and both outside the `EnvError`, so outside its
+ * promise never to print a value.
+ */
+describe('defineEnv — refine, the rules across variables', () => {
+  const pairSchema = {
+    GITHUB_CLIENT_ID: str({ optional: true }),
+    GITHUB_CLIENT_SECRET: str({ optional: true, secret: true }),
+  };
+  const pair = (v: { GITHUB_CLIENT_ID: string | null; GITHUB_CLIENT_SECRET: string | null }) =>
+    (v.GITHUB_CLIENT_ID === null) === (v.GITHUB_CLIENT_SECRET === null)
+      ? []
+      : [
+          {
+            name: v.GITHUB_CLIENT_ID === null ? ('GITHUB_CLIENT_ID' as const) : ('GITHUB_CLIENT_SECRET' as const),
+            reason: 'set both halves of the GitHub pair, or neither',
+          },
+        ];
+
+  it("joins a rule's problem into the same EnvError, by name", () => {
+    let caught: EnvError | null = null;
+    try {
+      defineEnv(pairSchema, { GITHUB_CLIENT_SECRET: SECRET }, { refine: pair });
+    } catch (err) {
+      caught = err as EnvError;
+    }
+    expect(caught).toBeInstanceOf(EnvError);
+    expect(caught!.variables).toEqual(['GITHUB_CLIENT_ID']);
+    expect(caught!.message).toContain('set both halves of the GitHub pair, or neither');
+    expect(caught!.message).not.toContain(SECRET);
+  });
+
+  it('lets both halves, or neither, through', () => {
+    expect(defineEnv(pairSchema, {}, { refine: pair })).toEqual({ GITHUB_CLIENT_ID: null, GITHUB_CLIENT_SECRET: null });
+    expect(defineEnv(pairSchema, { GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: SECRET }, { refine: pair }))
+      .toEqual({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: SECRET });
+  });
+
+  it('sees typed values — a mode-dependent requirement reads a parsed enum', () => {
+    const schema = {
+      NODE_ENV: enumOf(['development', 'production'], { default: 'development' }),
+      SESSION_SECRET: str({ optional: true, min: 32 }),
+      SESSION_DAYS: num({ default: 7 }),
+    };
+    const rule = (v: { NODE_ENV: 'development' | 'production'; SESSION_SECRET: string | null; SESSION_DAYS: number }) => {
+      expect(typeof v.SESSION_DAYS).toBe('number');
+      return v.NODE_ENV === 'production' && v.SESSION_SECRET === null
+        ? [{ name: 'SESSION_SECRET' as const, reason: 'required in production' }]
+        : [];
+    };
+    expect(defineEnv(schema, {}, { refine: rule }).SESSION_SECRET).toBeNull();
+    expect(() => defineEnv(schema, { NODE_ENV: 'production' }, { refine: rule })).toThrow(/SESSION_SECRET: required in production/);
+  });
+
+  it('is not asked about values that did not parse — the field is reported instead', () => {
+    let called = false;
+    expect(() =>
+      defineEnv({ PORT: num(), MODE: str({ optional: true }) }, { PORT: 'lots' }, {
+        refine: () => {
+          called = true;
+          return [];
+        },
+      }),
+    ).toThrow(/PORT/);
+    expect(called).toBe(false);
+  });
+
+  it('replaces a reason that quotes a value — the promise holds for text the kit did not write', () => {
+    let message = '';
+    try {
+      defineEnv(pairSchema, { GITHUB_CLIENT_SECRET: SECRET }, {
+        refine: (v) => [{ name: 'GITHUB_CLIENT_ID', reason: `no id to go with ${v.GITHUB_CLIENT_SECRET}` }],
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('GITHUB_CLIENT_ID: rejected by a rule across variables');
+    expect(message).not.toContain(SECRET);
+  });
+
+  it('refuses, at compile time, a problem about a variable the schema does not have', () => {
+    expect(() =>
+      defineEnv(pairSchema, {}, {
+        // @ts-expect-error a rule reports schema variables only
+        refine: () => [{ name: 'GITLAB_CLIENT_ID', reason: 'x' }],
+      }),
+    ).toThrow(EnvError);
+  });
+});
+
 describe('renderEnvExample', () => {
   const schema = {
     DOMAIN: str({ describe: 'Public host.', example: 'files.example.dev' }),

@@ -803,6 +803,22 @@ export const env = defineEnv(schema, process.env);
 export const example = () => renderEnvExample(schema, { header: 'Values are placeholders.' });
 ```
 
+A rule no single field can state — half of a provider's key pair, a secret
+required in one mode only — goes in `refine` (since v0.9.0), and its problems
+land in the same `EnvError`:
+
+```ts
+// With GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET as optional fields in `schema`:
+export const env = defineEnv(schema, process.env, {
+  // Runs once every field has parsed, over the typed values. Build reasons from
+  // names: one that quotes a variable's value is replaced by a generic reason.
+  refine: (v) =>
+    (v.GITHUB_CLIENT_ID === null) !== (v.GITHUB_CLIENT_SECRET === null)
+      ? [{ name: 'GITHUB_CLIENT_SECRET', reason: 'set both halves of the GitHub pair, or neither' }]
+      : [],
+});
+```
+
 ```ts
 // src/lib/telemetry.ts — one seam, filled once
 import { createTelemetry } from '@exo/kit/telemetry';

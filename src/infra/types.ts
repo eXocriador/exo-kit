@@ -12,9 +12,21 @@
  * Note what is NOT reported here: "not configured". A null URL is a supported
  * state, not a fault, and a module in that state stays silent.
  */
+/** The kit's own modules — what an editor suggests for {@link ErrorContext.component}. */
+export type KitComponent = 'db' | 'redis' | 'llm' | 'ai' | 'mailer' | 'notify' | 'health';
+
 export interface ErrorContext {
-  /** Which kit module produced this. */
-  component: 'db' | 'redis' | 'llm' | 'ai' | 'mailer' | 'notify' | 'health';
+  /**
+   * Which module produced this: one of the kit's, or a product's own.
+   *
+   * Open since v0.9.0. The closed union meant a product factory (teamself's
+   * `createLinear`) could not take the same `reportError` every kit factory
+   * takes — `'linear'` was not a kit module, so `tsc` refused it and the
+   * product wrote a wrapper whose only job was the cast. `(string & {})` keeps
+   * the kit's names as suggestions without refusing anyone else's. The price:
+   * a `switch` over this field is no longer checked for exhaustiveness.
+   */
+  component: KitComponent | (string & {});
   /** Stable dotted event name, e.g. `db.query_error`. Safe to use as a metric key. */
   event: string;
   /** Extra structured fields. Never contains a credential or a query parameter. */

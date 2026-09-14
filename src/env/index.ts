@@ -71,6 +71,13 @@ export interface FieldMeta {
    * reach the message.
    */
   invalid?: string;
+  /**
+   * Every value the schema itself spells out — an enum's members, a boolean's
+   * words, lowercase. Quoting one reveals nothing the schema does not already
+   * say, so a `refine` reason may name it (`required in production`) without
+   * being taken for a leak.
+   */
+  vocabulary?: readonly string[];
 }
 
 /**
@@ -197,6 +204,7 @@ export function bool(options: CommonOptions & { optional?: boolean; default?: bo
     invalid: options.invalid ?? `expected one of ${[...TRUE].join('/')} or ${[...FALSE].join('/')}`,
     hasDefault: 'default' in options,
     fallback: options.default,
+    vocabulary: [...TRUE, ...FALSE],
   });
 }
 
@@ -252,6 +260,7 @@ export function enumOf<const V extends readonly [string, ...string[]]>(
     invalid: options.invalid ?? `expected one of: ${values.join(', ')}`,
     hasDefault: 'default' in options,
     fallback: options.default,
+    vocabulary: [...values],
   });
 }
 
@@ -304,17 +313,58 @@ function explain(field: EnvField<unknown>, raw: string, issues: z.ZodIssue[]): s
   return 'rejected by its schema';
 }
 
+/** One thing a rule across variables found wrong: which variable, and why. */
+export interface EnvProblem<Name extends string = string> {
+  name: Name;
+  /** Written from the rule's side. A reason that quotes a variable's value is replaced — see `refine`. */
+  reason: string;
+}
+
+export interface DefineEnvOptions<S extends EnvSchema> {
+  /**
+   * Rules that no single field can state: half of a provider's key pair, a
+   * secret that is required in one mode and not in another. Return what is
+   * wrong (empty when nothing is); the problems join the same {@link EnvError}
+   * as a field's, by name.
+   *
+   * Runs **once every field has parsed**, over the typed, frozen values — a
+   * rule over a value that did not parse would be guessing, and its argument
+   * would have to be typed as a lie. So a deployment with a bad field hears
+   * about the field first and about the rule on the next boot.
+   *
+   * The same promise as a field's message, kept the only way the kit can keep
+   * it for text it did not write: a reason that contains the raw value of any
+   * variable in the schema is replaced with a generic one — except a value the
+   * schema spells out itself (an enum member, a boolean word; see
+   * `FieldMeta.vocabulary`). That catches a rule that interpolates a value, not
+   * one that transforms it first, and it can replace an innocent reason that
+   * happens to contain a very short value. Build reasons from names.
+   */
+  refine?: (values: EnvOf<S>) => ReadonlyArray<EnvProblem<keyof S & string>>;
+}
+
+const RULE_REJECTED = 'rejected by a rule across variables';
+
 /**
  * Read, validate and type the environment. Throws {@link EnvError} listing
  * every bad variable — a fresh deployment has three of them wrong, and one
  * restart per variable is not a diagnostic.
  */
-export function defineEnv<S extends EnvSchema>(schema: S, source: EnvSource): EnvOf<S> {
+export function defineEnv<S extends EnvSchema>(
+  schema: S,
+  source: EnvSource,
+  options: DefineEnvOptions<S> = {},
+): EnvOf<S> {
   const problems: Array<{ name: string; reason: string }> = [];
   const result: Record<string, unknown> = {};
+  /** Raw values a rule's reason must not quote. */
+  const guarded: string[] = [];
 
   for (const [name, field] of Object.entries(schema) as Array<[string, EnvField<unknown>]>) {
     const raw = (source[name] ?? '').trim();
+    if (raw !== '' && !field.meta.vocabulary?.includes(raw.toLowerCase()) && !field.meta.vocabulary?.includes(raw)) {
+      guarded.push(raw);
+    }
 
     if (raw === '') {
       if (field.meta.hasDefault) result[name] = field.meta.fallback;
@@ -329,8 +379,17 @@ export function defineEnv<S extends EnvSchema>(schema: S, source: EnvSource): En
   }
 
   if (problems.length) throw new EnvError(problems);
-  // Frozen: the product reads this everywhere and writes it nowhere.
-  return Object.freeze(result) as EnvOf<S>;
+  // Frozen: the product reads this everywhere and writes it nowhere — the rule
+  // included.
+  const env = Object.freeze(result) as EnvOf<S>;
+
+  for (const problem of options.refine?.(env) ?? []) {
+    const leaks = guarded.some((raw) => problem.reason.includes(raw));
+    problems.push({ name: problem.name, reason: leaks ? RULE_REJECTED : problem.reason });
+  }
+  if (problems.length) throw new EnvError(problems);
+
+  return env;
 }
 
 // ── the example file ────────────────────────────────────────────────────────

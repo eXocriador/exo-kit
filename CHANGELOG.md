@@ -133,6 +133,36 @@ Prose only, for C3: the `createDb` and `defineEnv` examples and two doc comments
 say `DATABASE_URL`; `test/env.test.ts` uses it as the sample name. The kit still
 never reads `process.env`.
 
+### env
+
+**G1. `defineEnv(schema, source, { refine })` — rules across variables** (§10,
+block «Модульність, B1-netwatch: другий споживач kit v0.5.1», request 1).
+filebrowser's `pair()` and netwatch's mode-dependent `SESSION_SECRET` lived
+outside `EnvError` and so outside its promise. `refine(values) => problems[]`
+runs once every field has parsed, over the typed frozen values, and its problems
+join the same `EnvError` by name (typed to the schema's keys). A reason that
+contains any variable's raw value is replaced with `rejected by a rule across
+variables` — except a value the schema spells out itself (an enum member, a
+boolean word: new `FieldMeta.vocabulary`), found the hard way by the kit's own
+test, whose `required in production` was being eaten because `NODE_ENV` was
+`production`. Deliberate: a rule is not run while a field is failing — its
+argument would be typed as a lie — so a bad field and a broken rule take two
+boots, not one. New exports `EnvProblem`, `DefineEnvOptions`. Compatible: the
+third argument is optional.
+
+### infra
+
+**G2. `ErrorContext.component` is open** (§10, block «Модульність,
+B1-teamself: третій і останній споживач kit v0.5.1», request 1).
+`KitComponent | (string & {})`: the kit's names stay as suggestions, and a
+product factory (`createLinear`, `component: 'linear'`) takes the same
+`reportError` as a kit factory with no wrapper. New export `KitComponent`. This
+retracts v0.8.0's note that an exhaustive `switch` over the field gets a compile
+error — that was the closed union's only benefit and the reason products could
+not share the reporter.
+
+Tests: 441 → see the release commit; 7 opt-in skipped, as before.
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)
