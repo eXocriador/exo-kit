@@ -3,12 +3,13 @@ import type { ReportError } from './types.js';
 export interface DbConfig {
     /**
      * The connection string, already resolved by the caller. The kit never reads
-     * `process.env`, and this is the field where that rule earns its keep: one
-     * product spells the variable `POSTGRES_URL`, another `DATABASE_URL`, and a
-     * third accepts both because an engine once read one name while the
-     * installation set the other and the whole package degraded to a silent
-     * no-op. Which name is right is a question about a deployment, not about a
-     * pool.
+     * `process.env`, and this is the field where that rule earns its keep: the
+     * portfolio spelled the variable `POSTGRES_URL` in some products and
+     * `DATABASE_URL` in others, and one accepted both because an engine once read
+     * one name while the installation set the other and the whole package
+     * degraded to a silent no-op. The canonical name is `DATABASE_URL` now (plan
+     * §5 C3 — dbmate reads nothing else), but which name a product uses is still
+     * a question about a deployment, not about a pool.
      *
      * `null` / `undefined` means "not configured", which is a supported state:
      * every accessor below then answers the not-available branch instead of
@@ -56,7 +57,7 @@ export interface Db {
  * Build a Postgres accessor from an explicit config.
  *
  *     const { sql, query, tryQuery, jsonb } = createDb({
- *       url: process.env.POSTGRES_URL,
+ *       url: env.DATABASE_URL,
  *       reportError: (err, ctx) => { log.warn(ctx.event); captureException(err); },
  *     });
  *

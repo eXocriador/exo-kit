@@ -180,6 +180,12 @@ export function buildAuthOptions(o) {
     if (email) {
         plugins.push(magicLink({
             expiresIn: linkMinutes * 60,
+            // The row in `verification` is SHA-256 (base64url) of the token, not
+            // the token: a dump of the table stops being a list of working login
+            // links. The library hashes the incoming token before its lookup, so
+            // nothing else changes and nothing costs more. Not a parameter — it is
+            // the property `login_tokens` had before this module replaced it.
+            storeToken: 'hashed',
             sendMagicLink: async ({ email: to, url, token }) => {
                 const letter = email.letters.magicLink({ url, token }, linkMinutes);
                 await email.send(to, letter.subject, letter.text);

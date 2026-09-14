@@ -15,7 +15,7 @@ function open(config) {
  * Build a Postgres accessor from an explicit config.
  *
  *     const { sql, query, tryQuery, jsonb } = createDb({
- *       url: process.env.POSTGRES_URL,
+ *       url: env.DATABASE_URL,
  *       reportError: (err, ctx) => { log.warn(ctx.event); captureException(err); },
  *     });
  *

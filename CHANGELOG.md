@@ -161,7 +161,10 @@ retracts v0.8.0's note that an exhaustive `switch` over the field gets a compile
 error — that was the closed union's only benefit and the reason products could
 not share the reporter.
 
-Tests: 441 → see the release commit; 7 opt-in skipped, as before.
+Tests: 441 → 483, files 28 → 30 (`sessions` A and B, `auth-wrapper` C,
+`entry-graph` D, `migrate` E, `migrate-template` F — new, `env` and
+`error-context` G — new); 7 opt-in skipped, as before. The opt-in
+`auth-postgres` suite was not run for this release.
 
 ## v0.8.0 — 2026-09-13
 

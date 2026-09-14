@@ -18,6 +18,6 @@ export { hashPassword, verifyPassword, isKitPasswordHash, passwordLengthError, M
 export { generateTotpSecret, totpUri, verifyTotp, generateRecoveryCodes, recoveryCodeHash, } from './totp.js';
 export { createAuthTokens } from './tokens.js';
 export type { AuthTokens, AuthTokensConfig } from './tokens.js';
-export { createSessionStore } from './sessions.js';
-export type { SessionStore, SessionStoreConfig, SessionCache, SessionInfo, SessionMeta, } from './sessions.js';
+export { createSessionStore, sessionIdHash } from './sessions.js';
+export type { RevokeResult, InvalidateResult, SessionStore, SessionStoreConfig, SessionCache, SessionInfo, SessionMeta, } from './sessions.js';
 //# sourceMappingURL=index.d.ts.map

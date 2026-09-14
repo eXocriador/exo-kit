@@ -10,6 +10,35 @@
  * to order, and it is better to hear that from a gate than from a deploy.
  */
 export declare function migrationVersion(file: string): string;
+/**
+ * Which runner reads the copies.
+ *
+ * - `dbmate` (the default) — `<dir>/<name>.sql`, the kit's file byte for byte.
+ *   `dir` belongs to the kit: every `.sql` in it counts as a copy.
+ * - `prisma` — `<dir>/<name without .sql>/migration.sql`, holding only the
+ *   `-- migrate:up` half under a two-line header. `dir` is the product's whole
+ *   `prisma/migrations`, since Prisma reads one directory; only subdirectories
+ *   named with the kit's version floor ({@link KIT_VERSION_FLOOR}) count as
+ *   copies, so the product's own migrations and `migration_lock.toml` are
+ *   never reported.
+ */
+export type VendorFormat = 'dbmate' | 'prisma';
+/**
+ * The date every kit migration's version starts with — an ordering floor,
+ * not a day (README, "File names are an ordering floor"). In `prisma` format it
+ * is also how a kit copy is told apart from a product's migration in the one
+ * directory they share.
+ */
+export declare const KIT_VERSION_FLOOR = "20200101";
+/**
+ * The `-- migrate:up` half of a dbmate migration: from the marker line up to,
+ * not including, `-- migrate:down` — the half a runner that cannot read the
+ * markers must be given on its own.
+ *
+ * @throws when there is no `-- migrate:up` line: there is no half to take, and
+ * the whole file is not a safe guess.
+ */
+export declare function migrateUpHalf(text: string, name?: string): string;
 /** One file's verdict in {@link checkKitMigrations}. */
 export type VendoredState = 
 /** The copy is byte-identical to the package's file. */
@@ -25,7 +54,7 @@ export type VendoredState =
  */
  | 'extra';
 export interface VendoredFile {
-    /** File name, the same on both sides. */
+    /** The kit's file name (`….sql`), whichever format the copy is in. */
     name: string;
     /** The version dbmate would record for it. */
     version: string;
@@ -50,11 +79,12 @@ export interface VendorOptions {
     files: string[];
     /**
      * Where the copies live in the product's tree, e.g.
-     * `apps/api/migrations/kit`. Created by `sync` if it does not exist; every
-     * `.sql` in it is treated as a copy of a kit file, so nothing else belongs
-     * there.
+     * `apps/api/migrations/kit` (dbmate) or `prisma/migrations` (prisma).
+     * Created by `sync` if it does not exist.
      */
     dir: string;
+    /** Which runner reads the copies. Default `dbmate`. See {@link VendorFormat}. */
+    format?: VendorFormat;
 }
 /**
  * Compare the copies in `dir` against the files the package ships.

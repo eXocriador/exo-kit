@@ -17,7 +17,7 @@
  * failures that produced were all the same shape: a `PORT` that parsed to
  * `NaN` and silently became the default, half a provider key pair that made a
  * login button that leads to the provider's error page, a connection string
- * spelled `POSTGRES_URL` in one product and `DATABASE_URL` in the next. The
+ * spelled two ways across products (the canon is `DATABASE_URL` now). The
  * Python product that did validate (`pydantic-settings`) has none of them.
  *
  * ── Empty is not configured ──
@@ -37,7 +37,7 @@
  * import { defineEnv, str, num, url, bool } from '@exo/kit/env';
  *
  * export const schema = {
- *   POSTGRES_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
+ *   DATABASE_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
  *                       describe: 'Shared postgres. Empty = the product runs without one.' }),
  *   SESSION_SECRET: str({ min: 32, secret: true, describe: 'openssl rand -base64 48' }),
  *   PORT: num({ default: 3000, omitExample: true, describe: 'Set by compose.' }),
@@ -69,6 +69,13 @@ export interface FieldMeta {
      * reach the message.
      */
     invalid?: string;
+    /**
+     * Every value the schema itself spells out — an enum's members, a boolean's
+     * words, lowercase. Quoting one reveals nothing the schema does not already
+     * say, so a `refine` reason may name it (`required in production`) without
+     * being taken for a leak.
+     */
+    vocabulary?: readonly string[];
 }
 /**
  * One variable. `value` is type-only: it is never set and never read, and it
@@ -180,12 +187,40 @@ export declare function custom<T>(schema: CustomSchema<T>, options?: CommonOptio
 export declare function custom<T>(schema: CustomSchema<T>, options: CommonOptions & {
     optional: true;
 }): EnvField<T | null>;
+/** One thing a rule across variables found wrong: which variable, and why. */
+export interface EnvProblem<Name extends string = string> {
+    name: Name;
+    /** Written from the rule's side. A reason that quotes a variable's value is replaced — see `refine`. */
+    reason: string;
+}
+export interface DefineEnvOptions<S extends EnvSchema> {
+    /**
+     * Rules that no single field can state: half of a provider's key pair, a
+     * secret that is required in one mode and not in another. Return what is
+     * wrong (empty when nothing is); the problems join the same {@link EnvError}
+     * as a field's, by name.
+     *
+     * Runs **once every field has parsed**, over the typed, frozen values — a
+     * rule over a value that did not parse would be guessing, and its argument
+     * would have to be typed as a lie. So a deployment with a bad field hears
+     * about the field first and about the rule on the next boot.
+     *
+     * The same promise as a field's message, kept the only way the kit can keep
+     * it for text it did not write: a reason that contains the raw value of any
+     * variable in the schema is replaced with a generic one — except a value the
+     * schema spells out itself (an enum member, a boolean word; see
+     * `FieldMeta.vocabulary`). That catches a rule that interpolates a value, not
+     * one that transforms it first, and it can replace an innocent reason that
+     * happens to contain a very short value. Build reasons from names.
+     */
+    refine?: (values: EnvOf<S>) => ReadonlyArray<EnvProblem<keyof S & string>>;
+}
 /**
  * Read, validate and type the environment. Throws {@link EnvError} listing
  * every bad variable — a fresh deployment has three of them wrong, and one
  * restart per variable is not a diagnostic.
  */
-export declare function defineEnv<S extends EnvSchema>(schema: S, source: EnvSource): EnvOf<S>;
+export declare function defineEnv<S extends EnvSchema>(schema: S, source: EnvSource, options?: DefineEnvOptions<S>): EnvOf<S>;
 export interface RenderEnvExampleOptions {
     /** Comment block at the top of the file. */
     header?: string;

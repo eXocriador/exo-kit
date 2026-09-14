@@ -17,7 +17,7 @@
  * failures that produced were all the same shape: a `PORT` that parsed to
  * `NaN` and silently became the default, half a provider key pair that made a
  * login button that leads to the provider's error page, a connection string
- * spelled `POSTGRES_URL` in one product and `DATABASE_URL` in the next. The
+ * spelled two ways across products (the canon is `DATABASE_URL` now). The
  * Python product that did validate (`pydantic-settings`) has none of them.
  *
  * ── Empty is not configured ──
@@ -37,7 +37,7 @@
  * import { defineEnv, str, num, url, bool } from '@exo/kit/env';
  *
  * export const schema = {
- *   POSTGRES_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
+ *   DATABASE_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
  *                       describe: 'Shared postgres. Empty = the product runs without one.' }),
  *   SESSION_SECRET: str({ min: 32, secret: true, describe: 'openssl rand -base64 48' }),
  *   PORT: num({ default: 3000, omitExample: true, describe: 'Set by compose.' }),
@@ -121,6 +121,7 @@ export function bool(options = {}) {
         invalid: options.invalid ?? `expected one of ${[...TRUE].join('/')} or ${[...FALSE].join('/')}`,
         hasDefault: 'default' in options,
         fallback: options.default,
+        vocabulary: [...TRUE, ...FALSE],
     });
 }
 export function url(options = {}) {
@@ -152,6 +153,7 @@ export function enumOf(values, options = {}) {
         invalid: options.invalid ?? `expected one of: ${values.join(', ')}`,
         hasDefault: 'default' in options,
         fallback: options.default,
+        vocabulary: [...values],
     });
 }
 export function custom(schema, options = {}) {
@@ -169,16 +171,22 @@ function explain(field, raw, issues) {
         return message;
     return 'rejected by its schema';
 }
+const RULE_REJECTED = 'rejected by a rule across variables';
 /**
  * Read, validate and type the environment. Throws {@link EnvError} listing
  * every bad variable — a fresh deployment has three of them wrong, and one
  * restart per variable is not a diagnostic.
  */
-export function defineEnv(schema, source) {
+export function defineEnv(schema, source, options = {}) {
     const problems = [];
     const result = {};
+    /** Raw values a rule's reason must not quote. */
+    const guarded = [];
     for (const [name, field] of Object.entries(schema)) {
         const raw = (source[name] ?? '').trim();
+        if (raw !== '' && !field.meta.vocabulary?.includes(raw.toLowerCase()) && !field.meta.vocabulary?.includes(raw)) {
+            guarded.push(raw);
+        }
         if (raw === '') {
             if (field.meta.hasDefault)
                 result[name] = field.meta.fallback;
@@ -196,8 +204,16 @@ export function defineEnv(schema, source) {
     }
     if (problems.length)
         throw new EnvError(problems);
-    // Frozen: the product reads this everywhere and writes it nowhere.
-    return Object.freeze(result);
+    // Frozen: the product reads this everywhere and writes it nowhere — the rule
+    // included.
+    const env = Object.freeze(result);
+    for (const problem of options.refine?.(env) ?? []) {
+        const leaks = guarded.some((raw) => problem.reason.includes(raw));
+        problems.push({ name: problem.name, reason: leaks ? RULE_REJECTED : problem.reason });
+    }
+    if (problems.length)
+        throw new EnvError(problems);
+    return env;
 }
 const comment = (text) => text
     .split('\n')
