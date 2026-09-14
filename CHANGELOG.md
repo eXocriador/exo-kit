@@ -3,6 +3,37 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.9.1 — 2026-09-14
+
+Templates only. No module changed; a consumer's bump does nothing.
+
+### templates
+
+**Docker archetypes** (plan §5 C2, the kit half). Written from the decisions the
+product half left in §10 of `products/AGENTS.md`, block «Модульність, C2
+(продуктова половина)». `templates/docker/` gains seven Dockerfile archetypes —
+`static-nginx` (+ `nginx.conf`), `next-standalone`, `node-api` (+ `build.mjs`),
+`node-prisma`, `node-worker`, `python-uv`, `python-wrapper` — and
+`compose-service.yml`, with a README that names the placeholders, the canonical
+portfolio member of each form, and the proof. Common to all seven: a base with
+the Debian codename in the tag (`node:22-bookworm-slim`,
+`python:3.12-slim-trixie` — the bare tags already point at different Debian
+releases), a non-root `USER`, a `HEALTHCHECK` with `--start-interval` and no
+curl or wget in Node and Python images, `ARG APP_VERSION` in the last stage,
+gates in a stage the final image actually copies. Three decisions taken here
+rather than lifted from a product: the worker form is on bookworm-slim, not
+alpine; the wrapper form installs with `pip --require-hashes`; the compose block
+carries `no-new-privileges` and `cap_drop: ALL` but not `read_only`. Reasons are
+in the files.
+
+**Each archetype was built and run** over a stub of its form; numbers in
+`templates/docker/README.md`. The negative proofs: without `rm -rf node_modules`
+pnpm 12.4.1 still carries dev packages into the runtime (61 MB with typescript,
+esbuild and vite, against 15 MB), and a failing test in `python-uv`'s `test`
+stage fails the build.
+
+README: new section "Templates: `templates/`". `templates/migrate.sh` is untouched.
+
 ## v0.9.0 — 2026-09-14
 
 The queue of requests product sessions left in §10 of `products/AGENTS.md` on
