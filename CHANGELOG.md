@@ -30,6 +30,26 @@ hash too. `revokeOwnedSession` and `revokeOtherSessions` take that stored form;
 stored hashed since v0.9.0", has both and the window between them. Proven on a
 copy of netwatch's live database (3 rows), not only by a test.
 
+### auth
+
+**C. The magic link's row is a hash** (§10, block «Модульність, B2, споживач 2:
+exoanima на `@exo/kit/auth`», request 2). `magicLink({ storeToken: 'hashed' })`:
+`verification.identifier` is SHA-256 (base64url) of the token, and the library
+hashes the incoming token before its lookup, so the link in the letter works as
+before at no cost. `test/auth-wrapper.test.ts` holds both halves — nothing in the
+row contains the token, and the letter's link still signs in — and fails with
+the option removed.
+
+**No rows are moved, and that has a visible edge:** a link sent before the bump
+holds its token as issued, and the lookup now hashes, so that one link stops
+working. They live `linkMinutes`; whoever clicks one asks for another.
+
+Said plainly, because the request read wider than this: the password-reset row
+(`reset-password:<token>`) still stores the token as issued — Better Auth 1.7.4
+has no option for it. The comment in `20200101000001_kit_auth.sql` that calls
+`verification` live credentials is left alone: changing the file's bytes would
+fail every consumer's `exo-kit-migrations check` on the bump for a comment.
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)

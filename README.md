@@ -343,9 +343,13 @@ columns.
 * **`UNIQUE (provider, provider_id)` is ours.** `auth@1.7.4 generate` emits only
   an index on `userId`, so two tabs finishing one login at the same moment would
   write two identity rows. The migration supplies the key.
-* **`verification.value` is the token as issued**, where the products' own
-  `login_tokens` stored a SHA-256. A dump of that table is live credentials
-  until the rows expire.
+* **Only the magic link's row in `verification` is hashed.** Since v0.9.0 the
+  kit passes `storeToken: 'hashed'`, so that row's `identifier` is SHA-256 of the
+  token (the column earlier text here called `value`), which is what the
+  products' own `login_tokens` stored. The password-reset row
+  (`reset-password:<token>`) still holds the token as issued — Better Auth
+  1.7.4 has no switch for it — so a dump of the table is a working reset link
+  until that row expires.
 
 ### The magic link deletes passwords, and that is deliberate
 

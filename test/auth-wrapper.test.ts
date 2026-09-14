@@ -236,6 +236,38 @@ describe('the letter', () => {
   });
 });
 
+describe('the magic link row', () => {
+  it('stores a hash of the token, and the link in the letter still signs in', async () => {
+    // B2-exoanima: `login_tokens` stored a SHA-256, and moving onto this module
+    // lost that — a dump of `verification` was a list of working login links.
+    // `storeToken: 'hashed'` gives it back. The second half is the part that
+    // would break silently: the library must hash the incoming token before
+    // its lookup, or every link in every letter stops working at once.
+    const { auth, store, sent } = build();
+    await magicLinkApi(auth).signInMagicLink({ body: { email: 'h@example.com' }, headers: new Headers() });
+
+    const url = new URL(sent.find((letter) => letter.subject === 'link')!.text.split(' ')[0]!);
+    const token = url.searchParams.get('token')!;
+    expect(token).toMatch(/^[A-Za-z]{32}$/);
+
+    expect(store.verification).toHaveLength(1);
+    const row = store.verification[0]!;
+    // Nothing in the row is — or contains — what went into the letter.
+    for (const value of Object.values(row)) {
+      expect(String(value)).not.toContain(token);
+    }
+    const { createHash } = await import('node:crypto');
+    expect(row.identifier).toBe(createHash('sha256').update(token).digest('base64url'));
+
+    const verify = await auth.handler(new Request(url));
+    expect([200, 302]).toContain(verify.status);
+    expect(store.users).toHaveLength(1);
+    expect(store.sessions).toHaveLength(1);
+    // Consumed: the same link does not sign in twice.
+    expect(store.verification).toHaveLength(0);
+  });
+});
+
 describe('the ceiling on letters to one address', () => {
   it('counts the recipient, not the caller', async () => {
     // Better Auth's own limiter keys on IP + path. Behind Traefik that is one
