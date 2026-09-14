@@ -641,6 +641,47 @@ a broken deploy:
    directories via `-d` twice work, and the order is by timestamp across both
    — not "this directory, then that one".
 
+## Templates: `templates/`
+
+Files a product **copies**, not code it imports: no subpath exports them, and a
+consumer's bump changes nothing in a product that already copied one.
+
+| file | what it is | where the copy lives |
+|---|---|---|
+| `templates/migrate.sh` | the dbmate wrapper ("The five traps in `migrate.sh`" above) | `products/<name>/migrate.sh` |
+| `templates/docker/<form>/Dockerfile` | seven Dockerfile archetypes, one per form the portfolio actually has | the product's repository |
+| `templates/docker/compose-service.yml` | one service block of a product's compose file | `products/<name>/docker-compose.yml` |
+
+| form | directory | for |
+|---|---|---|
+| F1 | `static-nginx` (+ `nginx.conf`) | a static build (Vite, Next export) behind `nginx-unprivileged` |
+| F2 | `next-standalone` | Next with `output: 'standalone'` |
+| F3 | `node-api` (+ `build.mjs`) | a Node HTTP service in a pnpm monorepo, bundled with esbuild |
+| F4 | `node-prisma` | Next or Node with Prisma, one tree, `MIGRATE=prisma` from the image |
+| F5 | `node-worker` | a background Node process (worker, scheduler, scanner) |
+| F6 | `python-uv` | a Python service on uv |
+| F7 | `python-wrapper` | a thin HTTP wrapper around a third-party Python tool |
+
+`templates/docker/README.md` has the placeholders, how to pick a form, the
+portfolio member each archetype was lifted from, and the proof.
+
+**The comments are the point, not decoration.** Every non-obvious line in these
+files was paid for by a broken build or deploy somewhere in the portfolio, and
+its comment says where: `rm -rf node_modules` before `pnpm install --prod`,
+`start_interval` only together with `start_period`, volumes that *belong* to the
+process uid rather than being group-writable. A copy that drops the comment
+keeps the line only until the next person simplifies it away. `exo new` (plan
+D2) is meant to generate from these files and `exo audit` to measure drift
+against them; the first measurement, by hand, is
+`/srv/docs/audits/2026-09-14-dockerfile-drift.md`.
+
+**Proven by building, not by reading.** Each archetype was built over a stub
+application of its form the way `exo-deploy` builds (`git archive HEAD | docker
+build -`) and run with the compose archetype's `no-new-privileges` and
+`cap_drop: ALL`: healthy within ~2–3 s, a non-root uid, the built commit in the
+health body. That proves a file does not lie about itself. It does not prove a
+product moves onto it without pain.
+
 ## Using it
 
 The intended shape is one small wiring module per product that calls the

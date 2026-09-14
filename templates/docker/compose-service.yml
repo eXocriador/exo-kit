@@ -1,0 +1,96 @@
+# АРХЕТИП — сервіс у docker-compose.yml продукту (@exo/kit, templates/docker).
+# Не самостійний файл: блок вставляється під `services:` у
+# /srv/products/<продукт>/docker-compose.yml. Стандарт — AGENTS.md §4; форми
+# Dockerfile і як перевірено — templates/docker/README.md; хто сьогодні без чого
+# — /srv/docs/audits/2026-09-14-dockerfile-drift.md.
+#
+# Заповнити: __APP_NAME__, __SVC__, __DOCKERFILE__, __PORT__, __UID__, __GID__,
+# __HEALTH_TEST__ (рядок проби — той самий, що HEALTHCHECK в архетипі форми),
+# __MEM_LIMIT__ (замір, див. нижче). Мережі й мітки — як у продукту: лише
+# `internal`, якщо сервіс не веб; без `labels`, якщо його не видно назовні.
+
+  __SVC__:
+    # exo-deploy збирає образ сам (`git archive HEAD | docker build`); `build:`
+    # тут — документ і шлях для `docker compose build` на стенді, а не те, чим
+    # збирається прод.
+    build:
+      context: ./repo
+      dockerfile: __DOCKERFILE__
+    # Ім'я МУСИТЬ збігатися з тим, яким exo-deploy мітить зібране
+    # (`<продукт>-<сервіс>[:IMAGE_TAG]`): інакше `up -d --no-build` мовчки
+    # підніме СТАРИЙ образ, і жодна проба цього не побачить (C1, IMAGE_TAG).
+    image: __APP_NAME__-__SVC__
+    container_name: __APP_NAME__-__SVC__
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: true
+    # uid:gid процесу — той самий, що USER в образі, числами. Повторено тут, щоб
+    # `docker inspect` і аудит бачили користувача без розбору образу і щоб
+    # підмінений образ не повернув root. nginx-unprivileged — 101:101, node —
+    # 1000:1000; пише в bind-монт під /srv — 1000:1001 (`exo:srv`), і тоді тека
+    # тому мусить НАЛЕЖАТИ 1000, а не бути g+w (python-uv/Dockerfile).
+    user: "__UID__:__GID__"
+    healthcheck:
+      # Той самий рядок, що HEALTHCHECK в образі: compose його заміщає, тож
+      # тримати однаковими. У node- і python-образах — `node -e fetch` /
+      # `python -c urllib`: ні wget, ні curl там немає.
+      test: __HEALTH_TEST__
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # ОБИДВА рядки нижче, не один. Traefik не маршрутизує контейнер, чий
+      # healthcheck ще `starting`: без start_interval перша проба йде через
+      # `interval`, і весь цей час маршрут віддає 404 — на кожному деплої
+      # (exoanima C2: ~17 с). А без start_period Docker start_interval ІГНОРУЄ.
+      # Заміряно 2026-09-14 (Docker 29.8, interval 30s, секунд до healthy):
+      #   нічого — 30; лише start_interval 2s — 31; лише start_period — 5;
+      #   обидва — 2.
+      start_period: 30s
+      start_interval: 2s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # ЗАМІРЯНЕ число, не вигадане. Як міряти: сервіс під навантаженням, схожим
+    # на живе (HTTP — 60 с × 16 паралельних клієнтів; збирач — найважча реальна
+    # робота), і пік cgroup, а не `docker stats` (той показує робочий набір, без
+    # кешу сторінок):
+    #   cat /sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' <контейнер>).scope/memory.peak
+    # Стеля — ≈1,5–2× піку. Ворота — та сама робота вже ПІД лімітом і в
+    # `memory.events` того ж cgroup `oom_kill 0`.
+    # Заміри exoanima (§10, «C2 (продуктова половина)»): web-статика — пік
+    # 13 МіБ → 64m; api-бандл — пік 232 МіБ → 384m; збирач ESP-IDF — робочий
+    # набір до 991 МіБ, пік cgroup 1762 МіБ уже під межею → 2g.
+    # До першого заміру рядок лишається ЗАКОМЕНТОВАНИМ, а README продукту
+    # називає це відхиленням: число «на око» гірше за відсутнє — воно виглядає
+    # як замір.
+    mem_limit: __MEM_LIMIT__
+    # Для власного non-root образу — безкоштовно, доведено збірками всіх семи
+    # архетипів (§10, «C2 (kit-половина)»): процесу не від root жодна capability
+    # не потрібна, а no-new-privileges закриває шлях назад через setuid-бінарники
+    # і файлові capability. НЕ копіювати наосліп на сторонні образи, що
+    # стартують від root і скидають права самі (linuxserver, postgres, chatwoot).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # `read_only: true` — свідомо НЕ в архетипі. Він ламає не старт, а перший
+    # запис на живому шляху: nginx пише pid і тимчасові файли в /tmp (падає
+    # одразу — це ще добре), а Next пише `.next/cache` лише коли сторінку вперше
+    # ревалідують — health зелений, фіча мертва. Вмикати по сервісу, коли всі
+    # шляхи запису перелічені (`tmpfs:`, томи) і доведені живою дією, не стартом.
+    networks:
+      - proxy                          # роутинг через Traefik; не веб — прибрати
+      - internal                       # лише якщо ходить у postgres/redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.__APP_NAME__-__SVC__.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.__APP_NAME__-__SVC__.entrypoints=websecure"
+      - "traefik.http.routers.__APP_NAME__-__SVC__.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.__APP_NAME__-__SVC__.middlewares=secure-headers@file,compress@file"
+      - "traefik.http.routers.__APP_NAME__-__SVC__.priority=10"
+      # порт, який слухає процес ВСЕРЕДИНІ контейнера
+      - "traefik.http.services.__APP_NAME__-__SVC__.loadbalancer.server.port=__PORT__"
