@@ -68,6 +68,22 @@ has no option for it. The comment in `20200101000001_kit_auth.sql` that calls
 `verification` live credentials is left alone: changing the file's bytes would
 fail every consumer's `exo-kit-migrations check` on the bump for a comment.
 
+**D. `@exo/kit/auth/migrations` — the migration list on its own subpath**
+(packaging). Not a numbered request in §10: B3's first half (block «Модульність,
+B3 (перша половина)») moved `authMigrations` into its own module and left the
+export where it was, and E1-syncwatch (request 2) paid for the barrel in a Next
+build. `src/auth/migrations.ts` never imported
+`better-auth`, but `package.json` exported it only through the `@exo/kit/auth`
+barrel, which does; the kit's own CLI dodged that with a deep import into
+`dist/` that `exports` forbids a consumer. `import { authMigrations } from
+'@exo/kit/auth/migrations'` now costs nothing. The barrel keeps its re-export
+(compatibility). `test/entry-graph.test.ts` pins the subpath, its empty import
+graph, and — new — that every `exports` entry has a source module.
+
+What D does **not** fix: Turbopack failing on `new URL('../../migrations/auth/',
+import.meta.url)` in a Next build. The subpath is the same code; a product on
+Next that imports the barrel still needs `serverExternalPackages`.
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)

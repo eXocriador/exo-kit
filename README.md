@@ -54,6 +54,7 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.8.0#subdirectory=python"
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
 | `@exo/kit/auth` | `createAuth` — the whole login: providers, magic link, TOTP, cabinet, admin | `better-auth`, `pg` |
+| `@exo/kit/auth/migrations` | `authMigrations` — the SQL files the login ships, for a migration script | nothing |
 | `@exo/kit/health` | `createHealth` — `live()` / `ready()` as Web-standard responses | nothing |
 | `@exo/kit/env` | `defineEnv`, `renderEnvExample` — one schema per product | `zod` |
 | `@exo/kit/telemetry` | `createTelemetry` — one seam for "something went wrong" | nothing |
@@ -496,7 +497,9 @@ trade. So: one mechanism everywhere, and a gate against the copy going stale.
 ### Calling it
 
 ```ts
-import { authMigrations } from '@exo/kit/auth';
+// Its own subpath since v0.9.0: `@exo/kit/auth` still re-exports it, but
+// through that barrel a script pays for Better Auth to read three file names.
+import { authMigrations } from '@exo/kit/auth/migrations';
 import { checkKitMigrations, syncKitMigrations } from '@exo/kit/migrate';
 
 // The flags must mirror what the product passes to `createAuth` — they decide

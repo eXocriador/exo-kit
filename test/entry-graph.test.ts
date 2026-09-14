@@ -200,6 +200,40 @@ describe('subpath entries and what they import', () => {
     expect([...bareSpecifiers('auth/migrations.ts')]).toEqual([]);
   });
 
+  it('@exo/kit/auth/migrations is its own subpath, so a script gets the list without Better Auth', () => {
+    // The row above says the FILE imports nothing. That was true before this
+    // subpath existed and bought a product nothing: the only way in was the
+    // `@exo/kit/auth` barrel, which walks into `better-auth` first. The kit's
+    // own CLI got round that with a deep import into `dist/`, which a consumer
+    // cannot do — `exports` refuses any path it does not list.
+    const pkg = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf8')) as {
+      exports: Record<string, { types: string; import: string } | string>;
+    };
+    expect(pkg.exports['./auth/migrations']).toEqual({
+      types: './dist/auth/migrations.d.ts',
+      import: './dist/auth/migrations.js',
+    });
+    const specs = [...bareSpecifiers('auth/migrations.ts')];
+    expect(specs.filter((s) => s.startsWith('better-auth'))).toEqual([]);
+    // Compatibility, not a second door to maintain: the barrel keeps it.
+    expect(readFileSync(resolve(SRC, 'auth/index.ts'), 'utf8')).toMatch(
+      /export \{ authMigrations \} from '\.\/migrations\.js'/,
+    );
+  });
+
+  it('every subpath in package.json exports points at a module that exists in src', () => {
+    // A subpath whose source was renamed builds nothing into dist/, and the
+    // first to find out is a product's `npm ci` + import at run time.
+    const pkg = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf8')) as {
+      exports: Record<string, { import: string } | string>;
+    };
+    for (const [subpath, target] of Object.entries(pkg.exports)) {
+      if (typeof target === 'string') continue; // ./package.json
+      const source = resolve(SRC, target.import.replace(/^\.\/dist\//, '').replace(/\.js$/, '.ts'));
+      expect(existsSync(source), `${subpath} → ${source}`).toBe(true);
+    }
+  });
+
   it('@exo/kit/infra is the one entry that pulls both drivers', () => {
     // Stated, not lamented: this entry exists to hand out a pool and a cache.
     // The test is here so the line stays true in both directions — an entry

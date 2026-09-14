@@ -77,6 +77,10 @@
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js"
     },
+    "./auth/migrations": {
+      "types": "./dist/auth/migrations.d.ts",
+      "import": "./dist/auth/migrations.js"
+    },
     "./migrate": {
       "types": "./dist/migrate/index.d.ts",
       "import": "./dist/migrate/index.js"
