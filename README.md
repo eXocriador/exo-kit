@@ -650,11 +650,12 @@ export const {
   // This app's idea of who a caller is, and the one query that decides it.
   // The expiry predicate lives here: the kit does not re-check it, because
   // this runs once per gated request and splitting it would cost a round trip.
-  resolvePrincipal: async (sql, sessionId) => {
+  // `storedId` is the hash in `sessions.id`, not the cookie's id (v0.9.0).
+  resolvePrincipal: async (sql, storedId) => {
     const rows = await sql`
       SELECT s.id AS session_id, u.id::text AS user_id, u.role, u.status
       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.id = ${sessionId} AND s.expires_at > NOW()
+      WHERE s.id = ${storedId} AND s.expires_at > NOW()
       LIMIT 1`;
     const row = rows[0];
     if (!row || row.status !== 'active') return null;
@@ -766,6 +767,55 @@ telemetry.setReporter((err, ctx) => Sentry.captureException(err, { extra: ctx })
 // Every kit factory's `reportError` is then the same one object:
 //   createDb({ url, globalKey: '__db', reportError: telemetry.reportError })
 ```
+
+### Session ids are stored hashed since v0.9.0
+
+`createSessionStore` puts the SHA-256 (hex) of a session id into `sessions.id`
+and hands the raw id back for the cookie — the way `createAuthTokens` has
+always stored `auth_tokens`. Before v0.9.0 the column held the id as issued, so
+a copy of the table was a list of live sessions (netwatch audit, N-24).
+
+What that changes for a product:
+
+- **`resolvePrincipal(sql, storedId)` receives the hash.** A resolver that only
+  compares (`WHERE s.id = ${storedId}`) needs no edit. Whatever the principal
+  carries as `sessionId` is therefore the hash too — and so is `SessionInfo.id`,
+  so `s.id === principal.sessionId` in a cabinet keeps working.
+- **Raw in, from a cookie:** `resolveSession(raw)`, `revokeSession(raw)`.
+  **Stored in, from the database:** `revokeOwnedSession(userId, storedId)`,
+  `revokeOtherSessions(userId, keepStoredId)`. A product writing its own query
+  against `sessions` uses `sessionIdHash(raw)` from `@exo/kit/auth-core`.
+- **Existing rows must be moved once.** The column stays `text`, and the hash
+  of a 64-character hex id is 64 hex characters. Postgres ≥ 11 computes the
+  same string natively — no `pgcrypto`:
+
+  ```sql
+  -- Exactly once per database. A second run hashes the hashes and signs
+  -- everybody out; a dbmate migration in the product is what keeps it to once.
+  UPDATE sessions SET id = encode(sha256(convert_to(id, 'UTF8')), 'hex');
+  ```
+
+  Put it in a product migration so it runs in the deploy's migrate step, right
+  before the new image starts. Between the two, the old code looks up raw ids
+  in a table of hashes: a request that lands in those seconds is refused once
+  (the row is not lost — the next request on the new code resolves).
+
+  The two alternatives, named for what they cost:
+  - **`TRUNCATE sessions`** — everybody is signed out, and nothing needs
+    thinking about.
+  - **Do nothing** — the same outcome as `TRUNCATE` for every user (no existing
+    cookie resolves any more), with the old rows left in the table until their
+    `expires_at`. They are no longer credentials — a raw id presented as a
+    cookie is hashed and matches nothing — but they are dead weight nobody
+    chose to keep.
+
+Proven on a copy of netwatch's live database before release (v0.9.0): the
+`UPDATE` above, read out of this file rather than retyped, left no raw id in the
+table; `sessionIdHash(raw)` found each of the three rows; and the raw id of each
+resolved through the new store, with netwatch's resolver verbatim, to a
+principal of the same user whose `sessionId` is the hash. All three sessions had
+already lapsed, so the copy — only the copy — had `expires_at` moved an hour
+ahead first; without that the resolver's expiry predicate is all a run proves.
 
 ### Not configured is a state
 

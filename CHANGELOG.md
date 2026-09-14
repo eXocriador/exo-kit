@@ -3,6 +3,33 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.9.0 — 2026-09-14
+
+The queue of requests product sessions left in §10 of `products/AGENTS.md` on
+2026-09-13, closed in one release. **Minor, not patch: A changes a contract** —
+what `sessions.id` holds and what `resolvePrincipal` receives — and existing
+rows need a one-off `UPDATE` on the bump. In 0.x a breaking change is a minor.
+
+### auth-core
+
+**A. Session ids are stored hashed** (N-24; §10, block «netwatch: хвіст аудиту
+(N-04, N-06, N-11, N-12, N-17) і канон `DATABASE_URL`»). `createSession` writes
+`sha256(raw)` hex into `sessions.id` and returns the raw id for the cookie;
+`resolveSession` and `revokeSession` hash what the cookie carries before it
+touches `sql` or the cache; cache keys are the stored form, which is what lets
+the bulk revocations clear them from ids read out of the table. **Contract
+change:** `resolvePrincipal(sql, storedId)` now receives the hash, and so
+`SessionInfo.id` and whatever a principal builds its `sessionId` from are the
+hash too. `revokeOwnedSession` and `revokeOtherSessions` take that stored form;
+`resolveSession` and `revokeSession` take the raw one. New export
+`sessionIdHash(raw)` (also on the store, beside `AuthTokens.tokenHash`).
+
+**On the bump, every consumer with rows runs once:**
+`UPDATE sessions SET id = encode(sha256(convert_to(id, 'UTF8')), 'hex');` — or
+`TRUNCATE sessions` and everybody signs in again. README, "Session ids are
+stored hashed since v0.9.0", has both and the window between them. Proven on a
+copy of netwatch's live database (3 rows), not only by a test.
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)

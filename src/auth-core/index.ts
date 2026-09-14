@@ -31,7 +31,7 @@ export {
 } from './totp.js';
 export { createAuthTokens } from './tokens.js';
 export type { AuthTokens, AuthTokensConfig } from './tokens.js';
-export { createSessionStore } from './sessions.js';
+export { createSessionStore, sessionIdHash } from './sessions.js';
 export type {
   SessionStore,
   SessionStoreConfig,

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Sql } from 'postgres';
 
 /**
@@ -8,6 +8,24 @@ import type { Sql } from 'postgres';
  * calls a user) so sessions survive a cache flush and stay revocable. The cache
  * holds the resolved principal for fast per-request lookup; an entry is
  * short-lived and re-checked against `expires_at` on every miss.
+ *
+ * ── The id in the cookie is not the id in the table ──
+ * Since v0.9.0 `sessions.id` holds the SHA-256 (hex) of the id the cookie
+ * carries, for the reason `auth_tokens` has always stored a hash: a copy of the
+ * table — a dump, a replica, a backup someone left readable — used to be a list
+ * of live sessions, and now it is a list of values nobody can present. A hash
+ * fed back into a cookie is hashed again and matches nothing.
+ *
+ * The raw id exists in exactly two places: the return value of `createSession`
+ * (to be signed into the cookie) and the argument of the two functions that are
+ * handed a cookie — `resolveSession` and `revokeSession`. Everything that comes
+ * back OUT of the database is the stored form: the id `resolvePrincipal`
+ * receives, `SessionInfo.id`, and so whatever a product builds its principal's
+ * `sessionId` from. The functions that take such an id — `revokeOwnedSession`
+ * and `revokeOtherSessions` — take it as stored. Cache keys are the stored form
+ * too, which is what lets a bulk revocation clear them from ids it read out of
+ * the table. `test/sessions.test.ts` holds the raw id away from `sql` and the
+ * cache on every path.
  *
  * ── Why the principal arrives as a resolver ──
  * This is the one place the two copies genuinely disagreed, and not
@@ -34,12 +52,26 @@ import type { Sql } from 'postgres';
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 const DEFAULT_CACHE_TTL_SECONDS = 60; // re-validate against PG at least once a minute
 
+/**
+ * The stored form of a raw session id: SHA-256, lowercase hex — 64 characters,
+ * the same length as the id itself, so the column does not change.
+ *
+ * Exported for a product writing its own query against `sessions`, and for the
+ * one-off `UPDATE` that moves existing rows (README, "Session ids are stored
+ * hashed"): Postgres computes the same string with
+ * `encode(sha256(convert_to(id, 'UTF8')), 'hex')`.
+ */
+export function sessionIdHash(raw: string): string {
+  return createHash('sha256').update(raw, 'utf8').digest('hex');
+}
+
 export interface SessionMeta {
   ip?: string;
   userAgent?: string;
 }
 
 export interface SessionInfo {
+  /** The stored id (a hash) — an identifier to show and to revoke by, never a credential. */
   id: string;
   ip: string | null;
   userAgent: string | null;
@@ -64,8 +96,12 @@ export interface SessionStoreConfig<P> {
    * Runs inside the query runner, so a throw is reported and answered as a
    * refusal rather than escaping into a route handler. See the note above:
    * this function is responsible for the expiry predicate.
+   *
+   * `storedId` is the value in `sessions.id` — the HASH of the cookie's id,
+   * since v0.9.0. A resolver that compares (`WHERE s.id = ${storedId}`) needs
+   * no change; one that did anything else with the id does.
    */
-  resolvePrincipal(sql: Sql, sessionId: string): Promise<P | null>;
+  resolvePrincipal(sql: Sql, storedId: string): Promise<P | null>;
   /** How long a new session row lives. Default 7 days. */
   ttlSeconds?: number;
   /** How long a resolved principal is cached. Default 60s. */
@@ -75,22 +111,24 @@ export interface SessionStoreConfig<P> {
 }
 
 export interface SessionStore<P> {
-  /** Create a session for a user. Returns the raw session id (to be signed into a cookie). */
+  /** Create a session for a user. Returns the RAW session id (to be signed into a cookie); the table gets its hash. */
   createSession(userId: string, meta?: SessionMeta): Promise<string | null>;
-  /** Resolve a session id to its principal, or null. Cached. */
-  resolveSession(sessionId: string): Promise<P | null>;
-  /** A user's live sessions, newest first — for a "signed-in devices" view. */
+  /** Resolve the raw id from a cookie to its principal, or null. Cached. */
+  resolveSession(rawSessionId: string): Promise<P | null>;
+  /** A user's live sessions, newest first — for a "signed-in devices" view. Ids are the stored form. */
   listUserSessions(userId: string): Promise<SessionInfo[]>;
-  /** Revoke one session that belongs to `userId`. Ownership-scoped. */
-  revokeOwnedSession(userId: string, sessionId: string): Promise<boolean>;
-  /** Revoke every session for a user except one. */
-  revokeOtherSessions(userId: string, keepSessionId: string): Promise<void>;
-  /** Revoke a single session (logout). */
-  revokeSession(sessionId: string): Promise<void>;
+  /** Revoke one session that belongs to `userId`, by its STORED id (`SessionInfo.id`). Ownership-scoped. */
+  revokeOwnedSession(userId: string, storedId: string): Promise<boolean>;
+  /** Revoke every session for a user except one, given by its STORED id (the principal's, the listing's). */
+  revokeOtherSessions(userId: string, keepStoredId: string): Promise<void>;
+  /** Revoke a single session (logout), by the RAW id from the cookie. */
+  revokeSession(rawSessionId: string): Promise<void>;
   /** Revoke every session for a user. */
   revokeUserSessions(userId: string): Promise<void>;
   /** Drop cached principals for a user WITHOUT logging them out. */
   invalidateUserCache(userId: string): Promise<void>;
+  /** The stored form of a raw id — {@link sessionIdHash}, here for symmetry with `AuthTokens.tokenHash`. */
+  sessionIdHash(raw: string): string;
   /** The configured session lifetime, for a caller setting a cookie's Max-Age. */
   ttlSeconds: number;
 }
@@ -103,33 +141,36 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
   const cacheTtlSeconds = config.cacheTtlSeconds ?? DEFAULT_CACHE_TTL_SECONDS;
   const prefix = config.cacheKeyPrefix ?? 'session:';
 
-  function cacheKey(sessionId: string): string {
-    return `${prefix}${sessionId}`;
+  /** Keys are built from the STORED id only — see the note at the top. */
+  function cacheKey(storedId: string): string {
+    return `${prefix}${storedId}`;
   }
 
   async function createSession(userId: string, meta: SessionMeta = {}): Promise<string | null> {
-    const id = randomBytes(32).toString('hex');
+    const raw = randomBytes(32).toString('hex');
+    const storedId = sessionIdHash(raw);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const ok = await query(async (sql) => {
       await sql`
         INSERT INTO sessions (id, user_id, expires_at, ip, user_agent)
-        VALUES (${id}, ${userId}::uuid, ${expiresAt}, ${meta.ip ?? null}, ${meta.userAgent ?? null})
+        VALUES (${storedId}, ${userId}::uuid, ${expiresAt}, ${meta.ip ?? null}, ${meta.userAgent ?? null})
       `;
       return true;
     });
-    return ok ? id : null;
+    return ok ? raw : null;
   }
 
-  async function resolveSession(sessionId: string): Promise<P | null> {
-    if (!sessionId) return null;
+  async function resolveSession(rawSessionId: string): Promise<P | null> {
+    if (!rawSessionId) return null;
+    const storedId = sessionIdHash(rawSessionId);
 
-    const cached = await cacheGet<P>(cacheKey(sessionId));
+    const cached = await cacheGet<P>(cacheKey(storedId));
     if (cached) return cached;
 
-    const principal = await query((sql) => resolvePrincipal(sql, sessionId));
+    const principal = await query((sql) => resolvePrincipal(sql, storedId));
     if (!principal) return null;
 
-    await cacheSet(cacheKey(sessionId), principal, cacheTtlSeconds);
+    await cacheSet(cacheKey(storedId), principal, cacheTtlSeconds);
     return principal;
   }
 
@@ -153,27 +194,32 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
     }));
   }
 
-  async function revokeOwnedSession(userId: string, sessionId: string): Promise<boolean> {
+  async function revokeOwnedSession(userId: string, storedId: string): Promise<boolean> {
     const rows = await query(async (sql) => {
       return await sql`
         DELETE FROM sessions
-        WHERE id = ${sessionId} AND user_id = ${userId}::uuid
+        WHERE id = ${storedId} AND user_id = ${userId}::uuid
         RETURNING id
       `;
     });
-    await cacheDel(cacheKey(sessionId));
+    await cacheDel(cacheKey(storedId));
     return Boolean(rows && rows[0]);
   }
 
   /**
    * Revoke every session for a user EXCEPT one (used after a password change to
    * keep the current device signed in but log out all others).
+   *
+   * `keepStoredId` is the stored form — what the product's principal carries
+   * when its resolver selects `s.id`. Handing it the raw cookie id instead
+   * matches no row, so the current device is signed out with the rest: the
+   * mistake fails closed, and it is still a mistake.
    */
-  async function revokeOtherSessions(userId: string, keepSessionId: string): Promise<void> {
+  async function revokeOtherSessions(userId: string, keepStoredId: string): Promise<void> {
     const ids = await query(async (sql) => {
       return await sql`
         DELETE FROM sessions
-        WHERE user_id = ${userId}::uuid AND id <> ${keepSessionId}
+        WHERE user_id = ${userId}::uuid AND id <> ${keepStoredId}
         RETURNING id`;
     });
     for (const r of ids ?? []) await cacheDel(cacheKey(r.id as string));
@@ -181,12 +227,13 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
 
   /** Row first, then the cache entry — see `revokeUserSessions` for why the
    *  order is load-bearing. */
-  async function revokeSession(sessionId: string): Promise<void> {
+  async function revokeSession(rawSessionId: string): Promise<void> {
+    const storedId = sessionIdHash(rawSessionId);
     await query(async (sql) => {
-      await sql`DELETE FROM sessions WHERE id = ${sessionId}`;
+      await sql`DELETE FROM sessions WHERE id = ${storedId}`;
       return true;
     });
-    await cacheDel(cacheKey(sessionId));
+    await cacheDel(cacheKey(storedId));
   }
 
   /**
@@ -238,6 +285,7 @@ export function createSessionStore<P>(config: SessionStoreConfig<P>): SessionSto
     revokeSession,
     revokeUserSessions,
     invalidateUserCache,
+    sessionIdHash,
     ttlSeconds,
   };
 }
