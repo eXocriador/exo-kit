@@ -52,6 +52,22 @@ RUN pnpm --filter __PKG__ run typecheck \
  && pnpm --filter __PKG__ run test
 RUN pnpm --filter __PKG__ run build
 
+# ── SPA, яку роздає той самий процес (необов'язково) ────────────────────────
+# Канонічна родина (план §3.2) — Fastify, що сам роздає зібрану Vite-SPA:
+# один процес, один образ (filebrowser; `exo new --kind api`). Сервіс без SPA —
+# не розкоментовувати. Заповнити: __WEB_DIR__ (тека SPA, напр. apps/web),
+# __WEB_PKG__ (її name). Окрема стадія, а не `build`: там install відфільтрований
+# до сервісу, і ні Vite з Tailwind не платять за ворота API, ні навпаки.
+# Виконується вона ЛИШЕ тому, що рантайм з неї копіює (`COPY --from=web` нижче):
+# без того рядка BuildKit пропустить стадію мовчки — разом із її воротами.
+# FROM base AS web
+# COPY packages ./packages
+# COPY __WEB_DIR__ ./__WEB_DIR__
+# COPY __SVC_DIR__/package.json ./__SVC_DIR__/package.json
+# RUN pnpm install --offline --frozen-lockfile --filter "__WEB_PKG__..." --filter "{.}"
+# RUN pnpm --filter __WEB_PKG__ run typecheck \
+#  && pnpm --filter __WEB_PKG__ run build
+
 # ── лише продові залежності сервісу ─────────────────────────────────────────
 # Без `...`: код робочих областей уже вклеєний у бандл, їхні пакети рантайму не
 # потрібні (посилання на теку пакета лишається, його ніхто не імпортує).
@@ -78,6 +94,9 @@ COPY --from=prod-deps /repo/__SVC_DIR__/node_modules ./node_modules
 # `type: module` з маніфесту — інакше Node прочитав би бандл як CommonJS.
 COPY __SVC_DIR__/package.json ./
 COPY --from=build /repo/__SVC_DIR__/dist ./dist
+# SPA (стадія `web` вище) — туди ж, де вона лежить у дереві репо: сервіс шукає
+# її відносно свого dist (`../../web/dist`). Цей рядок і змушує стадію виконатись.
+# COPY --from=web /repo/__WEB_DIR__/dist /repo/__WEB_DIR__/dist
 # MIGRATE=dbmate у deploy.conf запускає dbmate З ЦЬОГО ОБРАЗУ (робоча тека —
 # ця), тож бінарник і міграції їдуть сюди, і схема з кодом — один коміт за
 # побудовою (exo-ai, netwatch). БД немає — обидва рядки прибрати.

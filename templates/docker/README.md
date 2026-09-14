@@ -39,6 +39,7 @@
 |---|---|---|
 | `__SVC_DIR__` | F1, F2, F3, F5 | тека сервісу від кореня репо (`apps/api`) |
 | `__PKG__` | F1, F3 | `name` із package.json сервісу — для фільтрів pnpm |
+| `__WEB_DIR__`, `__WEB_PKG__` | F3, лише розкоментована стадія `web` | тека і `name` SPA, яку роздає той самий процес (`apps/web`) — з v0.9.2, для `exo new --kind api` |
 | `__OUT_DIR__` | F1 | що кладе збірка: `dist` (Vite), `out` (експорт Next) |
 | `__PORT__` | F2–F4, F6, F7, compose | порт усередині контейнера |
 | `__APP_MODULE__` | F6 | ASGI-модуль (`app.main:app`) |
