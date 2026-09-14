@@ -3,7 +3,30 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
-## v0.9.1 — 2026-09-14
+## v0.9.2 — 2026-09-14
+
+Templates only. No module changed; a consumer's bump does nothing.
+
+### templates
+
+**`node-api`: an optional `web` stage for the SPA the same process serves** (plan
+§5 D2, `exo new --kind api`). The canonical family (plan §3.2) is one Fastify
+process serving both the API and the built Vite SPA — filebrowser's shape — and
+the F3 archetype had no way to say so: its `build` stage installs only the
+service's filter, on purpose. The new stage is commented out, like the dbmate
+lines, and filled with two new placeholders, `__WEB_DIR__` and `__WEB_PKG__`. Its
+gates (`typecheck`, `vite build`) run only because the runtime copies `dist` from
+it (`COPY --from=web`) — without that line BuildKit skips the stage silently,
+gates included, and the archetype says so beside it.
+
+**Proven by building.** `exo new zz-sandbox --kind api --auth` generated a product
+from this archetype with the stage uncommented; `exo-deploy` built the image from
+`git archive HEAD` with every gate green (`migrations:check`, api `typecheck` and
+4 tests, web `typecheck` and `vite build`), dbmate applied the vendored login SQL,
+and the container started healthy as 1000:1001 with `no-new-privileges` and
+`cap_drop: ALL`, serving the SPA and `/health/ready` with the built commit. README:
+the placeholder row.
+
 
 Templates only. No module changed; a consumer's bump does nothing.
 
