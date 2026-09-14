@@ -29,11 +29,29 @@
  * language neutrality, the whole reason it was chosen, conditional on the
  * product being a Node product.
  *
+ * ── A product on Prisma ──
+ * Two products run `prisma migrate deploy` instead, and a byte copy is wrong
+ * for them twice over. Prisma reads `<dir>/<name>/migration.sql`, not flat
+ * files; and it applies a file WHOLE, where dbmate reads only the half between
+ * its markers — so the `-- migrate:down` block, which in every kit file raises
+ * on purpose, runs too and fails the migration on the kit's own guard.
+ * `format: 'prisma'` writes that layout with the `migrate:up` half only, and
+ * `check` compares against the same rendering, so the gate still means
+ * something.
+ *
  * ── What importing this pulls in ──
  * `node:fs` and `node:path`. No database driver, no dbmate, no network: this
  * module never applies a migration and never opens a connection.
  */
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 /**
@@ -59,6 +77,53 @@ export function migrationVersion(file: string): string {
   return digits[1]!;
 }
 
+/**
+ * Which runner reads the copies.
+ *
+ * - `dbmate` (the default) — `<dir>/<name>.sql`, the kit's file byte for byte.
+ *   `dir` belongs to the kit: every `.sql` in it counts as a copy.
+ * - `prisma` — `<dir>/<name without .sql>/migration.sql`, holding only the
+ *   `-- migrate:up` half under a two-line header. `dir` is the product's whole
+ *   `prisma/migrations`, since Prisma reads one directory; only subdirectories
+ *   named with the kit's version floor ({@link KIT_VERSION_FLOOR}) count as
+ *   copies, so the product's own migrations and `migration_lock.toml` are
+ *   never reported.
+ */
+export type VendorFormat = 'dbmate' | 'prisma';
+
+/**
+ * The date every kit migration's version starts with — an ordering floor,
+ * not a day (README, "File names are an ordering floor"). In `prisma` format it
+ * is also how a kit copy is told apart from a product's migration in the one
+ * directory they share.
+ */
+export const KIT_VERSION_FLOOR = '20200101';
+
+/**
+ * The `-- migrate:up` half of a dbmate migration: from the marker line up to,
+ * not including, `-- migrate:down` — the half a runner that cannot read the
+ * markers must be given on its own.
+ *
+ * @throws when there is no `-- migrate:up` line: there is no half to take, and
+ * the whole file is not a safe guess.
+ */
+export function migrateUpHalf(text: string, name = 'migration'): string {
+  const up = /^-- migrate:up\b.*$/m.exec(text);
+  if (!up) throw new Error(`${name}: no "-- migrate:up" line — nothing to take the up half of`);
+  const rest = text.slice(up.index);
+  const down = /^-- migrate:down\b.*$/m.exec(rest);
+  return down ? rest.slice(0, down.index) : rest;
+}
+
+function renderPrisma(source: string, name: string): Buffer {
+  // The header names neither marker: a copy that contained the word for the
+  // half it left out would be one grep away from looking like it kept it.
+  const header =
+    `-- ${name} from @exo/kit, apply half only. Prisma runs a file whole, and the kit's\n` +
+    `-- rollback half refuses by raising. Written by exo-kit-migrations; edit the kit, not this.\n`;
+  return Buffer.from(header + migrateUpHalf(readFileSync(source, 'utf8'), name), 'utf8');
+}
+
 /** One file's verdict in {@link checkKitMigrations}. */
 export type VendoredState =
   /** The copy is byte-identical to the package's file. */
@@ -75,7 +140,7 @@ export type VendoredState =
   | 'extra';
 
 export interface VendoredFile {
-  /** File name, the same on both sides. */
+  /** The kit's file name (`….sql`), whichever format the copy is in. */
   name: string;
   /** The version dbmate would record for it. */
   version: string;
@@ -102,11 +167,20 @@ export interface VendorOptions {
   files: string[];
   /**
    * Where the copies live in the product's tree, e.g.
-   * `apps/api/migrations/kit`. Created by `sync` if it does not exist; every
-   * `.sql` in it is treated as a copy of a kit file, so nothing else belongs
-   * there.
+   * `apps/api/migrations/kit` (dbmate) or `prisma/migrations` (prisma).
+   * Created by `sync` if it does not exist.
    */
   dir: string;
+  /** Which runner reads the copies. Default `dbmate`. See {@link VendorFormat}. */
+  format?: VendorFormat;
+}
+
+function formatOf(options: VendorOptions): VendorFormat {
+  const format = options.format ?? 'dbmate';
+  if (format !== 'dbmate' && format !== 'prisma') {
+    throw new Error(`unknown migration format: ${String(format)} (expected dbmate or prisma)`);
+  }
+  return format;
 }
 
 function packageFiles(files: string[]): Map<string, string> {
@@ -120,16 +194,38 @@ function packageFiles(files: string[]): Map<string, string> {
   return out;
 }
 
-function vendoredNames(dir: string): string[] {
+function isDirectory(dir: string): boolean {
   try {
     if (!statSync(dir).isDirectory()) throw new Error(`${dir} is not a directory`);
+    return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw err;
   }
-  return readdirSync(dir)
-    .filter((name) => name.endsWith('.sql'))
+}
+
+/** Kit file names the product holds a copy of, in the given format. */
+function vendoredNames(dir: string, format: VendorFormat): string[] {
+  if (!isDirectory(dir)) return [];
+  if (format === 'dbmate') {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.sql'))
+      .sort();
+  }
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(KIT_VERSION_FLOOR))
+    .map((entry) => `${entry.name}.sql`)
     .sort();
+}
+
+/** Where the copy of kit file `name` lives. */
+function targetOf(dir: string, name: string, format: VendorFormat): string {
+  return format === 'dbmate' ? join(dir, name) : join(dir, name.replace(/\.sql$/, ''), 'migration.sql');
+}
+
+/** What the copy of `source` must contain, byte for byte. */
+function expectedBytes(source: string, name: string, format: VendorFormat): Buffer {
+  return format === 'dbmate' ? readFileSync(source) : renderPrisma(source, name);
 }
 
 /**
@@ -141,8 +237,9 @@ function vendoredNames(dir: string): string[] {
  * a gate that repaired what it was measuring would always pass.
  */
 export function checkKitMigrations(options: VendorOptions): CheckResult {
+  const format = formatOf(options);
   const shipped = packageFiles(options.files);
-  const present = new Set(vendoredNames(options.dir));
+  const present = new Set(vendoredNames(options.dir, format));
   const names = [...new Set([...shipped.keys(), ...present])].sort();
 
   const files: VendoredFile[] = [];
@@ -150,19 +247,19 @@ export function checkKitMigrations(options: VendorOptions): CheckResult {
 
   for (const name of names) {
     const source = shipped.get(name);
-    const target = join(options.dir, name);
+    const target = targetOf(options.dir, name, format);
     let state: VendoredState;
     if (!source) {
       state = 'extra';
       problems.push(
         `${name}: in ${options.dir}, not shipped by the kit for this configuration — ` +
           'a block turned off since the copy was made, or a file the kit renamed. ' +
-          'dbmate applies it anyway.',
+          `${format === 'dbmate' ? 'dbmate' : 'Prisma'} applies it anyway.`,
       );
-    } else if (!present.has(name)) {
+    } else if (!present.has(name) || !existsSync(target)) {
       state = 'missing';
       problems.push(`${name}: shipped by the kit, missing from ${options.dir}. Run \`sync\`.`);
-    } else if (readFileSync(source).equals(readFileSync(target))) {
+    } else if (expectedBytes(source, name, format).equals(readFileSync(target))) {
       state = 'same';
     } else {
       state = 'changed';
@@ -192,6 +289,7 @@ export interface SyncResult extends CheckResult {
  * with a database behind it, so it stays a person's.
  */
 export function syncKitMigrations(options: VendorOptions): SyncResult {
+  const format = formatOf(options);
   const before = checkKitMigrations(options);
   const shipped = packageFiles(options.files);
   const written: string[] = [];
@@ -201,7 +299,13 @@ export function syncKitMigrations(options: VendorOptions): SyncResult {
     if (file.state !== 'missing' && file.state !== 'changed') continue;
     const source = shipped.get(file.name);
     if (!source) continue;
-    copyFileSync(source, join(options.dir, file.name));
+    const target = targetOf(options.dir, file.name, format);
+    if (format === 'dbmate') {
+      copyFileSync(source, target);
+    } else {
+      mkdirSync(join(target, '..'), { recursive: true });
+      writeFileSync(target, renderPrisma(source, file.name));
+    }
     written.push(file.name);
   }
 

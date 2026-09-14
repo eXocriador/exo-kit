@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { authMigrations } from '../src/auth/migrations.js';
-import { checkKitMigrations, migrationVersion, syncKitMigrations } from '../src/migrate/index.js';
+import {
+  checkKitMigrations,
+  migrateUpHalf,
+  migrationVersion,
+  syncKitMigrations,
+} from '../src/migrate/index.js';
 
 let root: string;
 let pkg: string;
@@ -136,6 +141,111 @@ describe('syncKitMigrations', () => {
   });
 });
 
+describe('migrateUpHalf', () => {
+  it('is the marker line up to, not including, migrate:down', () => {
+    const text = '-- about\n-- migrate:up\nCREATE TABLE t (id int);\n\n-- migrate:down\nDROP TABLE t;\n';
+    expect(migrateUpHalf(text)).toBe('-- migrate:up\nCREATE TABLE t (id int);\n\n');
+  });
+
+  it('runs to the end of a file with no down half', () => {
+    expect(migrateUpHalf('-- migrate:up\nSELECT 1;\n')).toBe('-- migrate:up\nSELECT 1;\n');
+  });
+
+  it('refuses a file with no up marker rather than guessing the whole file is safe', () => {
+    expect(() => migrateUpHalf('SELECT 1;\n', 'x.sql')).toThrow(/x\.sql: no "-- migrate:up" line/);
+  });
+});
+
+/**
+ * E1-syncwatch (§10): Prisma applies a file whole, where dbmate reads only
+ * the half between its markers, so a vendored kit file ran its own
+ * `migrate:down` — `RAISE EXCEPTION 'no rollback'` — and failed the migration.
+ * syncwatch cut the down half out by hand; `format: 'prisma'` is that cut,
+ * made by the tool and checked by the gate.
+ */
+describe("format: 'prisma'", () => {
+  /** Prisma reads one directory: the kit's copies share it with the product's. */
+  let prisma: string;
+  beforeEach(() => {
+    prisma = join(root, 'product', 'prisma', 'migrations');
+  });
+
+  const kitFile = (name: string) =>
+    ship(
+      name,
+      `-- what this file is\n-- migrate:up\nCREATE TABLE IF NOT EXISTS t (id int);\n\n` +
+        `-- migrate:down\nDO $$ BEGIN RAISE EXCEPTION 'no rollback: ${name}'; END $$;\n`,
+    );
+
+  it('writes <dir>/<name>/migration.sql, holding the up half and no guard', () => {
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    const result = syncKitMigrations({ files, dir: prisma, format: 'prisma' });
+
+    expect(result.written).toEqual(['20200101000001_kit_a.sql']);
+    expect(result.ok).toBe(true);
+    const body = readFileSync(join(prisma, '20200101000001_kit_a', 'migration.sql'), 'utf8');
+    expect(body).toContain('CREATE TABLE IF NOT EXISTS t (id int);');
+    expect(body).not.toContain('migrate:down');
+    expect(body).not.toContain('RAISE');
+    expect(existsSync(join(prisma, '20200101000001_kit_a.sql'))).toBe(false);
+  });
+
+  it('checks against the same rendering, so a copy edited in place is still caught', () => {
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    syncKitMigrations({ files, dir: prisma, format: 'prisma' });
+    expect(checkKitMigrations({ files, dir: prisma, format: 'prisma' }).ok).toBe(true);
+
+    writeFileSync(join(prisma, '20200101000001_kit_a', 'migration.sql'), 'DROP TABLE users;\n');
+    const result = checkKitMigrations({ files, dir: prisma, format: 'prisma' });
+    expect(result.files[0]?.state).toBe('changed');
+    expect(syncKitMigrations({ files, dir: prisma, format: 'prisma' }).written).toEqual([
+      '20200101000001_kit_a.sql',
+    ]);
+  });
+
+  it("never reports the product's own migrations or migration_lock.toml", () => {
+    mkdirSync(join(prisma, '20260607004420_init'), { recursive: true });
+    writeFileSync(join(prisma, '20260607004420_init', 'migration.sql'), 'CREATE TABLE rooms (id int);\n');
+    writeFileSync(join(prisma, 'migration_lock.toml'), 'provider = "postgresql"\n');
+
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    const result = syncKitMigrations({ files, dir: prisma, format: 'prisma' });
+    expect(result.ok).toBe(true);
+    expect(result.files.map((f) => f.name)).toEqual(['20200101000001_kit_a.sql']);
+  });
+
+  it('reports a kit-floor directory the kit no longer ships, and deletes nothing', () => {
+    const files = [kitFile('20200101000001_kit_a.sql'), kitFile('20200101000002_kit_2fa.sql')];
+    syncKitMigrations({ files, dir: prisma, format: 'prisma' });
+
+    const result = syncKitMigrations({ files: [files[0]!], dir: prisma, format: 'prisma' });
+    expect(result.ok).toBe(false);
+    expect(result.files.find((f) => f.name === '20200101000002_kit_2fa.sql')?.state).toBe('extra');
+    expect(result.problems[0]).toMatch(/Prisma applies it anyway/);
+    expect(existsSync(join(prisma, '20200101000002_kit_2fa', 'migration.sql'))).toBe(true);
+  });
+
+  it('a directory without its migration.sql is missing, and sync fills it in', () => {
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    mkdirSync(join(prisma, '20200101000001_kit_a'), { recursive: true });
+    expect(checkKitMigrations({ files, dir: prisma, format: 'prisma' }).files[0]?.state).toBe('missing');
+    expect(syncKitMigrations({ files, dir: prisma, format: 'prisma' }).ok).toBe(true);
+  });
+
+  it('the default is still dbmate, byte for byte', () => {
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    syncKitMigrations({ files, dir });
+    expect(readFileSync(join(dir, '20200101000001_kit_a.sql')).equals(readFileSync(files[0]!))).toBe(true);
+  });
+
+  it('refuses a format it does not know', () => {
+    const files = [kitFile('20200101000001_kit_a.sql')];
+    expect(() => checkKitMigrations({ files, dir, format: 'flyway' as never })).toThrow(
+      /unknown migration format: flyway/,
+    );
+  });
+});
+
 describe('the SQL @exo/kit/auth actually ships', () => {
   const files = authMigrations({ totp: true, admin: true });
 
@@ -181,6 +291,18 @@ describe('the SQL @exo/kit/auth actually ships', () => {
     for (const file of files) {
       const name = file.split('/').pop()!;
       expect(readFileSync(join(dir, name)).equals(readFileSync(file)), name).toBe(true);
+    }
+  });
+
+  it('renders for Prisma with every statement of the up half and not the guard that would fail it', () => {
+    const prisma = join(root, 'prisma', 'migrations');
+    expect(syncKitMigrations({ files, dir: prisma, format: 'prisma' }).ok).toBe(true);
+    for (const file of files) {
+      const name = file.split('/').pop()!.replace(/\.sql$/, '');
+      const body = readFileSync(join(prisma, name, 'migration.sql'), 'utf8');
+      expect(body, name).toContain(migrateUpHalf(readFileSync(file, 'utf8')));
+      expect(body, name).not.toMatch(/RAISE EXCEPTION/);
+      expect(body, name).not.toContain('-- migrate:down');
     }
   });
 });

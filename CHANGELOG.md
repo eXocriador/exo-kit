@@ -84,6 +84,28 @@ What D does **not** fix: Turbopack failing on `new URL('../../migrations/auth/',
 import.meta.url)` in a Next build. The subpath is the same code; a product on
 Next that imports the barrel still needs `serverExternalPackages`.
 
+### migrate
+
+**E. `format: 'prisma'` — a vendored copy Prisma can apply** (§10, block
+«Модульність, E1-syncwatch», request 3 — not B2-exoanima, which the queue
+named). Prisma applies a migration file whole, so a byte copy of a kit file ran
+its own `-- migrate:down … RAISE EXCEPTION` and failed. `syncKitMigrations` /
+`checkKitMigrations` take `format: 'dbmate' | 'prisma'` (default `dbmate`), and
+the CLI takes `--format prisma`: `<dir>/<name>/migration.sql` with a two-line
+header and the up half only; `check` compares against that rendering. In the
+shared Prisma directory only `20200101…` subdirectories count as copies (new
+export `KIT_VERSION_FLOOR`); new export `migrateUpHalf(text)`. `--format` with
+anything else exits 2. Run end to end through the CLI against a Prisma-shaped
+directory (sync → check exit 0; the product's own migration and
+`migration_lock.toml` untouched); **not** run through `prisma migrate deploy`
+here — the kit has no Prisma. The half it renders is the same half syncwatch
+cut by hand and Prisma applied in production.
+
+**Nobody on dbmate regenerates anything:** the default format and the SQL files
+are byte-identical to v0.8.0. syncwatch, the one Prisma consumer, keeps its hand
+copy under `20260913100001_kit_auth` until its own session decides — the tool
+would add the floor-named copy beside it (README, "A product on Prisma").
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)

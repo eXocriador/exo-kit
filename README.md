@@ -550,6 +550,45 @@ exception aborts dbmate's transaction, exit code 2), and forward-only stays the
 standard. A migration written from scratch for a product may of course carry a
 real `down`.
 
+### A product on Prisma: `--format prisma`
+
+That down block is the trap for a product whose runner is Prisma. dbmate reads
+only the half between its markers; `prisma migrate deploy` applies a file
+**whole**, so a byte copy runs the `RAISE` too and fails the migration on the
+kit's own guard (syncwatch found this and cut the half out by hand). Prisma also
+wants `<dir>/<name>/migration.sql`, not flat files. So since v0.9.0:
+
+```
+exo-kit-migrations sync  --dir prisma/migrations --format prisma [--totp] [--admin]
+exo-kit-migrations check --dir prisma/migrations --format prisma [--totp] [--admin]
+```
+
+or `syncKitMigrations({ files, dir, format: 'prisma' })`. Each kit file becomes
+`prisma/migrations/20200101000001_kit_auth/migration.sql` holding a two-line
+header and the `-- migrate:up` half (`migrateUpHalf`, exported), and `check`
+compares against that same rendering, so an edited copy still fails the gate.
+Prisma reads one directory, so the copies share it with the product's own
+migrations: only subdirectories named with the kit floor (`20200101…`,
+`KIT_VERSION_FLOOR`) count as copies — nothing else there is ever reported, and
+a leftover floor directory is reported as `extra`, never deleted.
+
+Two things the flag does not decide for the product:
+
+- **Order.** Prisma sorts by directory name, so a kit file lands before the
+  product's first migration — the same floor as under dbmate, with the same
+  caveat: a product whose own history creates `users`/`sessions` must run its
+  migrations on an **empty** database once, because the convergent kit file
+  goes first there and the product's `CREATE TABLE` becomes a no-op (B2-exoanima
+  found missing columns exactly this way).
+- **A copy that already exists under another name.** syncwatch carries the kit
+  file as `20260913100001_kit_auth`, applied, with its own header. The tool does
+  not see it (no floor prefix) and would add `20200101000001_kit_auth` beside it
+  — convergent, so harmless to a live database, but two truths about the same
+  SQL. Moving onto the flag is that product's decision, not a bump's.
+
+The dbmate format is unchanged, byte for byte: products on dbmate regenerate
+nothing on this release.
+
 ### Moving a live database onto dbmate
 
 Our runners recorded the **file name**; dbmate records the **version**, the
