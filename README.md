@@ -627,8 +627,10 @@ a runner's log — the status output.
 Proven by running them (audit `2026-09-12-auth-sandbox.md` §4), each one worth
 a broken deploy:
 
-1. **Only `DATABASE_URL`.** Our canonical name is `POSTGRES_URL`, so
-   `--env-file .env` alone does nothing — the wrapper translates the name.
+1. **Only `DATABASE_URL`.** Since v0.9.0 that is also the canonical name
+   (plan §5 C3), so there is nothing to translate. A product whose variable
+   carries a prefix (`EXOANIMA_DATABASE_URL`) sets the wrapper's fifth
+   parameter, `DATABASE_VAR`, and the container still gets `DATABASE_URL`.
 2. **`?sslmode=disable` is required**, or `pq: SSL is not enabled on the server`.
 3. **`--no-dump-schema` is required**, or dbmate writes `db/schema.sql` into
    the mounted directory — a silent edit of the product's tree. The wrapper
@@ -670,7 +672,7 @@ import { captureException } from '@sentry/nextjs';
 import { logWarn } from '@/lib/log';
 
 export const { sql: db, query: dbQuery, tryQuery: dbTry, jsonb } = createDb({
-  url: process.env.POSTGRES_URL,
+  url: process.env.DATABASE_URL,
   globalKey: '__db',
   reportError: (err, ctx) => {
     logWarn(ctx.event, ctx.fields);
@@ -783,7 +785,7 @@ export const health = createHealth({
 import { defineEnv, str, num, url, bool, renderEnvExample } from '@exo/kit/env';
 
 export const schema = {
-  POSTGRES_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
+  DATABASE_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
                       describe: 'Shared postgres. Empty = the product runs without one.',
                       example: 'postgresql://app:<password>@postgres:5432/app' }),
   SESSION_SECRET: str({ min: 32, secret: true, describe: 'openssl rand -base64 48' }),

@@ -118,10 +118,10 @@ describe('defineEnv', () => {
     expect(defineEnv({ SITE_URL: url() }, { SITE_URL: 'https://files.example.dev' }))
       .toEqual({ SITE_URL: 'https://files.example.dev' });
     expect(() => defineEnv({ SITE_URL: url() }, { SITE_URL: 'files.example.dev' })).toThrow(/SITE_URL/);
-    expect(() => defineEnv({ POSTGRES_URL: url({ protocols: ['postgresql'] }) }, { POSTGRES_URL: 'redis://redis:6379/1' }))
-      .toThrow(/POSTGRES_URL/);
-    expect(defineEnv({ POSTGRES_URL: url({ protocols: ['postgresql', 'postgres'] }) }, { POSTGRES_URL: 'postgres://db/app' }))
-      .toEqual({ POSTGRES_URL: 'postgres://db/app' });
+    expect(() => defineEnv({ DATABASE_URL: url({ protocols: ['postgresql'] }) }, { DATABASE_URL: 'redis://redis:6379/1' }))
+      .toThrow(/DATABASE_URL/);
+    expect(defineEnv({ DATABASE_URL: url({ protocols: ['postgresql', 'postgres'] }) }, { DATABASE_URL: 'postgres://db/app' }))
+      .toEqual({ DATABASE_URL: 'postgres://db/app' });
   });
 
   it('enumOf accepts a listed value and names the allowed ones when it does not', () => {
@@ -184,15 +184,15 @@ describe('defineEnv', () => {
 
   it('an optional field that is set is still validated', () => {
     // "Optional" is about presence, not about correctness: a half-typed
-    // POSTGRES_URL must not reach the driver as a working configuration.
-    expect(() => defineEnv({ POSTGRES_URL: url({ optional: true }) }, { POSTGRES_URL: 'postgres//db' }))
-      .toThrow(/POSTGRES_URL/);
+    // DATABASE_URL must not reach the driver as a working configuration.
+    expect(() => defineEnv({ DATABASE_URL: url({ optional: true }) }, { DATABASE_URL: 'postgres//db' }))
+      .toThrow(/DATABASE_URL/);
     // How lenient the parser underneath is, said out loud: `new URL` accepts
     // 'postgres:/db' — a scheme and a path, no host. `url()` checks that a URL
     // parses and that its protocol is one of the expected ones; a product that
     // needs a host in there checks for a host.
-    expect(defineEnv({ POSTGRES_URL: url({ optional: true }) }, { POSTGRES_URL: 'postgres:/db' }))
-      .toEqual({ POSTGRES_URL: 'postgres:/db' });
+    expect(defineEnv({ DATABASE_URL: url({ optional: true }) }, { DATABASE_URL: 'postgres:/db' }))
+      .toEqual({ DATABASE_URL: 'postgres:/db' });
   });
 
   it('reads only the names in the schema and ignores the rest of the environment', () => {
@@ -204,7 +204,7 @@ describe('defineEnv', () => {
 describe('renderEnvExample', () => {
   const schema = {
     DOMAIN: str({ describe: 'Public host.', example: 'files.example.dev' }),
-    POSTGRES_URL: url({
+    DATABASE_URL: url({
       optional: true,
       protocols: ['postgresql', 'postgres'],
       describe: 'Shared postgres in the internal network.\nEmpty means the product runs without a database.',
@@ -220,7 +220,7 @@ describe('renderEnvExample', () => {
     expect(text).toContain('# Names come from the schema.');
     expect(text).toContain('# Public host.');
     expect(text).toContain('DOMAIN=files.example.dev');
-    expect(text).toContain('POSTGRES_URL=postgresql://app:<password>@postgres:5432/app');
+    expect(text).toContain('DATABASE_URL=postgresql://app:<password>@postgres:5432/app');
     // A secret gets a name and an explanation, never a placeholder that could
     // be pasted into production by someone in a hurry.
     expect(text).toContain('SESSION_SECRET=\n');
@@ -234,7 +234,7 @@ describe('renderEnvExample', () => {
   it('marks what is optional so the operator can tell what must be filled in', () => {
     const text = renderEnvExample(schema);
     const lines = text.split('\n');
-    const postgres = lines.findIndex((l) => l.startsWith('POSTGRES_URL='));
+    const postgres = lines.findIndex((l) => l.startsWith('DATABASE_URL='));
     expect(lines.slice(0, postgres).join('\n')).toMatch(/optional/i);
   });
 

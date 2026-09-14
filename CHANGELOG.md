@@ -106,6 +106,33 @@ are byte-identical to v0.8.0. syncwatch, the one Prisma consumer, keeps its hand
 copy under `20260913100001_kit_auth` until its own session decides — the tool
 would add the floor-named copy beside it (README, "A product on Prisma").
 
+### templates
+
+**F. `migrate.sh` on the canonical `DATABASE_URL`** (C3, the control session's
+decision of 2026-09-13 in plan §5; and §10, block «Модульність, B2, споживач 2:
+exoanima на `@exo/kit/auth`», request 5 — both halves). The template no longer
+reads `POSTGRES_URL` and translates it: it reads the variable named by a
+**fifth parameter**, `DATABASE_VAR="DATABASE_URL"`, beside `IMAGE`,
+`IMAGE_WORKDIR`, `MIGRATION_DIRS` and `DBMATE`, so exoanima and exopost keep
+their prefixes. `?sslmode=disable` is still appended when absent (trap 2 is
+real). **`MIGRATE_DATABASE_URL`** is captured *before* `set -a; . ./.env` —
+which overwrites the environment, and is how B2-exoanima's rehearsal aimed at a
+copy went to the live database — so `.env` can neither override it nor set it,
+and a run with it prints a warning naming the target host (not the
+credentials). `test/migrate-template.test.ts` (new) runs the real template under
+bash with a fake `docker` and asserts the `DATABASE_URL` the dbmate container
+would get, in eight cases.
+
+**A copy of the old template in a product keeps working** — copies are the
+product's. A product re-copying it from v0.9.0 while still on `POSTGRES_URL`
+is refused by name (`DATABASE_URL не задано в .env`) and nothing runs.
+
+### infra, env
+
+Prose only, for C3: the `createDb` and `defineEnv` examples and two doc comments
+say `DATABASE_URL`; `test/env.test.ts` uses it as the sample name. The kit still
+never reads `process.env`.
+
 ## v0.8.0 — 2026-09-13
 
 ### ai (new)

@@ -17,7 +17,7 @@
  * failures that produced were all the same shape: a `PORT` that parsed to
  * `NaN` and silently became the default, half a provider key pair that made a
  * login button that leads to the provider's error page, a connection string
- * spelled `POSTGRES_URL` in one product and `DATABASE_URL` in the next. The
+ * spelled two ways across products (the canon is `DATABASE_URL` now). The
  * Python product that did validate (`pydantic-settings`) has none of them.
  *
  * ── Empty is not configured ──
@@ -37,7 +37,7 @@
  * import { defineEnv, str, num, url, bool } from '@exo/kit/env';
  *
  * export const schema = {
- *   POSTGRES_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
+ *   DATABASE_URL: url({ optional: true, protocols: ['postgresql', 'postgres'],
  *                       describe: 'Shared postgres. Empty = the product runs without one.' }),
  *   SESSION_SECRET: str({ min: 32, secret: true, describe: 'openssl rand -base64 48' }),
  *   PORT: num({ default: 3000, omitExample: true, describe: 'Set by compose.' }),
