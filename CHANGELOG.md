@@ -27,6 +27,7 @@ and the container started healthy as 1000:1001 with `no-new-privileges` and
 `cap_drop: ALL`, serving the SPA and `/health/ready` with the built commit. README:
 the placeholder row.
 
+## v0.9.1 — 2026-09-14
 
 Templates only. No module changed; a consumer's bump does nothing.
 
