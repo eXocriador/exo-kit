@@ -81,13 +81,22 @@ describe('subpath entries and what they import', () => {
     expect([...bareSpecifiers('ai/index.ts')]).toEqual([]);
   });
 
-  it('@exo/kit/llm reaches no database driver', () => {
-    // It talks to HTTP endpoints with global `fetch`. It reads untrusted JSON,
-    // which is why it must take those helpers from `json/` directly and never
-    // through the `infra` barrel.
-    const specs = bareSpecifiers('llm/index.ts');
-    expect(specs.has('postgres')).toBe(false);
-    expect(specs.has('ioredis')).toBe(false);
+  it('@exo/kit/llm reaches no package at all', () => {
+    // Since v0.10.0 it is one embedder over global `fetch`, reading untrusted
+    // JSON through `json/` — never through the `infra` barrel, which would walk
+    // into both drivers. Before, the row only promised "no database driver",
+    // because four chat providers were behind it; with them gone it can make
+    // the same promise as `ai`.
+    expect([...bareSpecifiers('llm/index.ts')]).toEqual([]);
+  });
+
+  it('@exo/kit/llm no longer carries chat', () => {
+    // v0.10.0 removed `createLlm` and the providers (chat is `@exo/kit/ai`).
+    // A re-export creeping back would revive an API with no consumer and no
+    // budget behind it — the thing the model service exists to replace.
+    const entry = readFileSync(resolve(SRC, 'llm/index.ts'), 'utf8');
+    expect(entry).not.toMatch(/export\s+(?:async\s+)?function\s+createLlm|from '\.\/providers\//);
+    expect(existsSync(resolve(SRC, 'llm/providers'))).toBe(false);
   });
 
   it('@exo/kit/http is server-side all the way down, and says which builtins', () => {

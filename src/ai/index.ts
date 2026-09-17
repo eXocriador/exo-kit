@@ -18,8 +18,8 @@
  *   * `all_rungs_failed` — every rung of the ladder was tried and none
  *     answered. That is an outage, and the product takes its fail-safe path.
  *
- * `@exo/kit/llm` answered both with `null`, so a product could only ever do
- * one of the two. Here the difference is the discriminant of the result.
+ * The chat in `@exo/kit/llm` (removed in v0.10.0) answered both with `null`,
+ * so a product could only ever do one of the two. Here the difference is the discriminant of the result.
  *
  * ── What is NOT here ──
  *   * Retries. The service retries, per model, with its own backoff, and steps
@@ -69,8 +69,8 @@ export interface AiClientConfig {
    * Ceiling on one `complete()` when the call names none. Default 60 s.
    *
    * This is the bound on the WHOLE ladder, not on one model — the service has
-   * its own timeout per model and may try several. `@exo/kit/llm` fixed one
-   * 30 s for every call, which made a long reasoning call indistinguishable
+   * its own timeout per model and may try several. The old `@exo/kit/llm` chat
+   * fixed one 30 s for every call, which made a long reasoning call indistinguishable
    * from a dead one; so set it per call, from what is waiting on the answer.
    */
   timeoutMs?: number;

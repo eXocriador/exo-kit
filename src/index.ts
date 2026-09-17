@@ -15,7 +15,7 @@
 export type { Db, DbConfig, DbOutcome, RedisCache, RedisConfig, ErrorContext, ReportError } from './infra/index.js';
 export type { JsonRecord } from './json/index.js';
 export type { KitLogger, LoggerConfig, OpenObserveConfig, AuditRecord, LogFields } from './log/index.js';
-export type { Llm, LlmConfig, ChatMessage, ChatProvider, GenerateOptions, ProviderName } from './llm/index.js';
+export type { EmbedderConfig } from './llm/index.js';
 export type {
   AiClient,
   AiClientConfig,

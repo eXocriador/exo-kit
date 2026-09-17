@@ -49,7 +49,7 @@ uv add "git+https://github.com/eXocriador/exo-kit@v0.8.0#subdirectory=python"
 | `@exo/kit/json` | `isRecord`, `asArray`, `asString`, `asNumber`, `asBoolean`, `get`, `getPath` | nothing |
 | `@exo/kit/log` | `createLogger` — pino + an audit trail, optional log shipping | `pino` |
 | `@exo/kit/ai` | `createAiClient` — ask the exo-ai model service for a tier; typed refusals | nothing |
-| `@exo/kit/llm` | `createLlm` over Ollama / Anthropic / OpenAI / an OpenAI-compatible gateway; `createEmbedder` | nothing |
+| `@exo/kit/llm` | `createEmbedder` — embeddings over Ollama; chat is `@exo/kit/ai` since v0.10.0 | nothing |
 | `@exo/kit/http` | `createApiResponse`, `createRateLimiter`, `createClientIp`, `validateHost`, `safeFetch` | `node:crypto`, `node:dns`, `node:net` |
 | `@exo/kit/auth-core` | `hashPassword`, `verifyPassword`, TOTP, `createAuthTokens`, `createSessionStore` | `node:crypto` |
 | `@exo/kit/auth-core/cookie` | `createSessionCookie` — sign and verify a session cookie | nothing |
@@ -138,8 +138,8 @@ return failSafe();                                    // all_rungs_failed, timeo
 
 ### Two refusals, two actions
 
-`@exo/kit/llm` answered every failure with `null`, so a product could only
-ever do one thing about all of them. Two of them mean opposite things:
+The chat `@exo/kit/llm` used to carry answered every failure with `null`, so a
+product could only ever do one thing about all of them. Two of them mean opposite things:
 
 | result | what happened | what the product does |
 |---|---|---|
@@ -157,7 +157,7 @@ refusal: it is some other hop talking, and neither "the ceiling closed" nor
 
 The service has its own timeout per model and may try several, so the client's
 ceiling bounds the whole climb. It is set per call (`timeoutMs`), with a client
-default of 60 s — `@exo/kit/llm` fixed one 30 s for everything, which made a
+default of 60 s — the old `@exo/kit/llm` chat fixed one 30 s for everything, which made a
 long reasoning call indistinguishable from a dead one. A call the client gave
 up on may still finish, and still count, inside the service.
 
@@ -169,9 +169,29 @@ up on may still finish, and still count, inside the service.
 * **A long `subject`.** The service keeps 200 characters; a longer one is
   refused before sending, because two subjects sharing a 200-character prefix
   would share one counter.
-* **Embeddings.** The service does not compute them. `createEmbedder` stays in
-  `@exo/kit/llm`, and so does the chat client, until the last product still
-  calling it has moved.
+* **Embeddings.** The service does not compute them — see the next section.
+
+### Embeddings: `@exo/kit/llm`
+
+```ts
+import { createEmbedder } from '@exo/kit/llm';
+
+const embed = createEmbedder({ url: env.OLLAMA_URL, model: 'bge-m3' });
+const vector = await embed(text); // number[] | null — null when Ollama is down; never throws
+```
+
+A stored vector collection is tied to the dimensions of the model that wrote
+it, so the embedding model is pinned by the product that owns the collection,
+not chosen by a service that is free to fall back. That is the whole reason this
+did not move to exo-ai.
+
+**The chat that used to live here is gone since v0.10.0:** `createLlm`,
+`resolveProviderName`, `flattenConversation`, the Ollama / Anthropic / OpenAI /
+VibeConduit providers and their types (`Llm`, `LlmConfig`, `ChatMessage`,
+`ChatProvider`, `GenerateOptions`, `ProviderName`, `ProviderHooks`, the
+per-provider configs). Chat is `@exo/kit/ai` (v0.8.0); exointel, the last
+product calling `createLlm`, moved on 2026-09-14. A product still on it stays
+on v0.9.x until it has moved.
 
 ## The login: `@exo/kit/auth`
 
