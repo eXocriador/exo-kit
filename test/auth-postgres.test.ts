@@ -162,6 +162,47 @@ suite('the schema the module ships, against a real Postgres', () => {
     expect(JSON.stringify(listed)).not.toContain(sessions.rows[0]!.token);
   });
 
+  it('lists the devices of a session older than a day, over the real adapter', async () => {
+    // v0.10.0: `auth.listSessions` no longer goes through the library's
+    // `freshSessionMiddleware`. The memory adapter proves the logic; this proves
+    // the internal adapter's query over our renamed columns.
+    const signIn = await auth.instance.api.signInEmail({
+      body: { email: 'pg.user@example.com', password: 'a-real-password' },
+      asResponse: true,
+    });
+    const headers = new Headers({
+      cookie: signIn.headers.getSetCookie().map((c) => c.split(';')[0]).join('; '),
+    });
+    await pool.query("UPDATE sessions SET created_at = now() - interval '2 days'");
+    const listed = await auth.listSessions(headers);
+    expect(listed.length).toBeGreaterThanOrEqual(1);
+    expect(listed.filter((session) => session.current)).toHaveLength(1);
+  });
+
+  it('stores the reset row hashed and the letter still resets, over the real adapter', async () => {
+    sent.length = 0;
+    await auth.instance.api.requestPasswordReset({
+      body: { email: 'pg.user@example.com', redirectTo: 'http://localhost:3000/reset' },
+      headers: new Headers(),
+    });
+    const token = new URL(sent.at(-1)!).pathname.split('/').pop()!;
+    const rows = await pool.query<{ identifier: string; value: string }>('SELECT identifier, value FROM verification');
+    expect(rows.rows.length).toBeGreaterThan(0);
+    for (const row of rows.rows) {
+      expect(row.identifier).not.toContain(token);
+      expect(row.value).not.toContain(token);
+    }
+    await auth.instance.api.resetPassword({ body: { token, newPassword: 'a-real-password' } });
+    expect(
+      (
+        await auth.instance.api.signInEmail({
+          body: { email: 'pg.user@example.com', password: 'a-real-password' },
+          asResponse: true,
+        })
+      ).status,
+    ).toBe(200);
+  });
+
   it('rejects a second identity row for the same provider account', async () => {
     // The unique key the library does not create (§3.1). Two tabs finishing one
     // login at the same moment would otherwise leave two rows.
