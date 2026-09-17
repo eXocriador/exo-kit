@@ -529,7 +529,24 @@ export function buildAuthOptions<P>(o: CreateAuthOptions<P>): BetterAuthOptions 
       },
     },
 
-    verification: { modelName: MODEL_NAMES.verification, fields: VERIFICATION_FIELDS },
+    verification: {
+      modelName: MODEL_NAMES.verification,
+      fields: VERIFICATION_FIELDS,
+      // Fixed, not a parameter (v0.10.0). Every identifier is stored as SHA-256 (base64url),
+      // and every lookup hashes what it was handed. Before this a dump of
+      // `verification` held `reset-password:<token>` as issued — a working
+      // password reset for every account with a letter in flight.
+      //
+      // The option has one edge that decides everything around it: a lookup
+      // that misses by hash tries the identifier AS GIVEN (that is how rows
+      // written before the bump keep working). So a stored hash submitted as
+      // an identifier would match its own row. It cannot, for what this module
+      // uses: `reset-password:` carries a prefix a stored hash never has, the
+      // two-factor rows are keyed by a signed cookie, and the magic link keeps
+      // its own `storeToken: 'hashed'` above — drop that, and the letter's
+      // token becomes the row's identifier and the dump a list of links again.
+      storeIdentifier: 'hashed',
+    },
 
     emailAndPassword: passwordOn
       ? {

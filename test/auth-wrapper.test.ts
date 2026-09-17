@@ -47,9 +47,11 @@ interface Built {
  * itself.
  */
 function build(
-  options: { password?: boolean; perAddressLimit?: { max: number; windowMs: number } } = {},
+  options: { password?: boolean; totp?: boolean; perAddressLimit?: { max: number; windowMs: number } } = {},
 ): Built {
   const store = emptyStore();
+  // The memory adapter refuses a model it has no array for.
+  if (options.totp) (store as unknown as Record<string, Row[]>).two_factor = [];
   const sent: Built['sent'] = [];
   const auth = createAuth<{ userId: string }>({
     db: memoryAdapter(store as unknown as Record<string, Row[]>),
@@ -68,6 +70,7 @@ function build(
       ...(options.perAddressLimit ? { perAddressLimit: options.perAddressLimit } : {}),
     },
     resolvePrincipal: async (userId) => ({ userId }),
+    ...(options.totp ? { totp: { issuer: 'probe' } } : {}),
   });
   return { auth, store, sent };
 }
@@ -257,7 +260,11 @@ describe('the magic link row', () => {
       expect(String(value)).not.toContain(token);
     }
     const { createHash } = await import('node:crypto');
-    expect(row.identifier).toBe(createHash('sha256').update(token).digest('base64url'));
+    const sha = (value: string) => createHash('sha256').update(value).digest('base64url');
+    // Twice since v0.10.0: the plugin hashes the token, and `storeIdentifier`
+    // hashes whatever identifier it is handed. Both halves are needed — see
+    // the comment on `storeIdentifier` in `src/auth/index.ts`.
+    expect(row.identifier).toBe(sha(sha(token)));
 
     const verify = await auth.handler(new Request(url));
     expect([200, 302]).toContain(verify.status);
@@ -265,6 +272,146 @@ describe('the magic link row', () => {
     expect(store.sessions).toHaveLength(1);
     // Consumed: the same link does not sign in twice.
     expect(store.verification).toHaveLength(0);
+  });
+});
+
+describe('the password reset row', () => {
+  /** A verified account with a password, and the token its reset letter carries. */
+  async function resetLetter() {
+    const built = build({ password: true });
+    const { auth, store, sent } = built;
+    await auth.instance.api.signUpEmail({
+      body: { email: 'r@example.com', password: 'old-password-here', name: 'R' },
+      asResponse: true,
+    });
+    store.users[0]!.email_verified = true;
+    store.verification.length = 0;
+    await auth.instance.api.requestPasswordReset({
+      body: { email: 'r@example.com', redirectTo: 'http://localhost:3000/reset' },
+      headers: new Headers(),
+    });
+    const url = new URL(sent.find((letter) => letter.subject === 'reset')!.text);
+    const token = url.pathname.split('/').pop()!;
+    expect(token.length).toBeGreaterThanOrEqual(24);
+    return { ...built, token };
+  }
+
+  const signsIn = async (auth: Built['auth'], password: string) =>
+    (
+      await auth.instance.api.signInEmail({
+        body: { email: 'r@example.com', password },
+        asResponse: true,
+      })
+    ).status;
+
+  it('stores no token, and the token in the letter still resets the password', async () => {
+    // v0.9.0 closed this for the magic link and said, wrongly, that 1.7.4 had
+    // no option for the reset row. It has: `verification.storeIdentifier`.
+    // Before, a dump of `verification` was a password reset for every account
+    // with a letter in flight.
+    const { auth, store, token } = await resetLetter();
+    expect(store.verification).toHaveLength(1);
+    for (const value of Object.values(store.verification[0]!)) {
+      expect(String(value)).not.toContain(token);
+    }
+    const { createHash } = await import('node:crypto');
+    expect(store.verification[0]!.identifier).toBe(
+      createHash('sha256').update(`reset-password:${token}`).digest('base64url'),
+    );
+
+    await auth.instance.api.resetPassword({ body: { token, newPassword: 'new-password-here' } });
+    expect(await signsIn(auth, 'new-password-here')).toBe(200);
+    expect(store.verification).toHaveLength(0);
+  });
+
+  it('refuses the stored hash submitted as a token — the dump buys nothing', async () => {
+    // The lookup falls back to the identifier as given when the hash misses.
+    // The prefix is what keeps that fallback from matching a stored row.
+    const { auth, store } = await resetLetter();
+    const stored = String(store.verification[0]!.identifier);
+    await expect(
+      auth.instance.api.resetPassword({ body: { token: stored, newPassword: 'attacker-password' } }),
+    ).rejects.toMatchObject({ body: { code: 'INVALID_TOKEN' } });
+    expect(await signsIn(auth, 'attacker-password')).not.toBe(200);
+  });
+
+  it('keeps a letter sent before the bump working: its row is still plain', async () => {
+    // No rows are moved on the bump. The library's fallback reads the old form,
+    // so unlike the magic link in v0.9.0 nobody's letter stops working.
+    const { auth, store, token } = await resetLetter();
+    store.verification[0]!.identifier = `reset-password:${token}`;
+    await auth.instance.api.resetPassword({ body: { token, newPassword: 'new-password-here' } });
+    expect(await signsIn(auth, 'new-password-here')).toBe(200);
+  });
+});
+
+describe('two-factor sign-in over hashed verification rows', () => {
+  it('the pending sign-in row is a hash, and the code still completes it', async () => {
+    // `storeIdentifier: 'hashed'` covers every row, not only the reset: the
+    // two-factor step keys its pending sign-in by the signed cookie it sets.
+    // Hashing on write and not on lookup would lock every TOTP user out, and
+    // no other test here walks that path.
+    const { createHmac } = await import('node:crypto');
+    const totpNow = (base32: string) => {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+      let bits = 0;
+      let value = 0;
+      const bytes: number[] = [];
+      for (const char of base32.replace(/=+$/, '')) {
+        value = (value << 5) | alphabet.indexOf(char);
+        bits += 5;
+        if (bits >= 8) {
+          bytes.push((value >>> (bits - 8)) & 0xff);
+          bits -= 8;
+        }
+      }
+      const counter = Buffer.alloc(8);
+      counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+      const mac = createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+      return String((mac.readUInt32BE(mac[mac.length - 1]! & 0x0f) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+    };
+    type TwoFactorApi = {
+      enableTwoFactor(args: { body: { password: string }; headers: Headers }): Promise<{ totpURI: string }>;
+      verifyTOTP(args: { body: { code: string }; headers: Headers; asResponse: true }): Promise<Response>;
+    };
+
+    const { auth, store } = build({ password: true, totp: true });
+    const api = auth.instance.api as unknown as TwoFactorApi;
+    await auth.instance.api.signUpEmail({
+      body: { email: 't@example.com', password: 'a-real-password', name: 'T' },
+      asResponse: true,
+    });
+    store.users[0]!.email_verified = true;
+    const signIn = () =>
+      auth.instance.api.signInEmail({ body: { email: 't@example.com', password: 'a-real-password' }, asResponse: true });
+
+    const first = cookieOf(await signIn());
+    const { totpURI } = await api.enableTwoFactor({ body: { password: 'a-real-password' }, headers: first });
+    const secret = new URL(totpURI).searchParams.get('secret')!;
+    // Enabling finishes with one verified code.
+    expect((await api.verifyTOTP({ body: { code: totpNow(secret) }, headers: first, asResponse: true })).status).toBe(200);
+
+    store.verification.length = 0;
+    const pending = await signIn();
+    expect(await pending.clone().json()).toMatchObject({ twoFactorRedirect: true });
+    const pendingCookies = pending.headers.getSetCookie().map((c) => c.split(';')[0]!);
+    // The pending row and its attempt counter; neither is keyed by what the
+    // cookie carries.
+    expect(store.verification.length).toBeGreaterThan(0);
+    for (const cookie of pendingCookies) {
+      const raw = decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)).split('.')[0]!;
+      if (raw === '') continue; // a cookie being cleared
+      for (const row of store.verification) expect(String(row.identifier)).not.toContain(raw);
+    }
+
+    const sessionsBefore = store.sessions.length;
+    const done = await api.verifyTOTP({
+      body: { code: totpNow(secret) },
+      headers: new Headers({ cookie: pendingCookies.join('; ') }),
+      asResponse: true,
+    });
+    expect(done.status).toBe(200);
+    expect(store.sessions.length).toBe(sessionsBefore + 1);
   });
 });
 
