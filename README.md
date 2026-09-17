@@ -364,13 +364,67 @@ columns.
 * **`UNIQUE (provider, provider_id)` is ours.** `auth@1.7.4 generate` emits only
   an index on `userId`, so two tabs finishing one login at the same moment would
   write two identity rows. The migration supplies the key.
-* **Only the magic link's row in `verification` is hashed.** Since v0.9.0 the
-  kit passes `storeToken: 'hashed'`, so that row's `identifier` is SHA-256 of the
-  token (the column earlier text here called `value`), which is what the
-  products' own `login_tokens` stored. The password-reset row
-  (`reset-password:<token>`) still holds the token as issued — Better Auth
-  1.7.4 has no switch for it — so a dump of the table is a working reset link
-  until that row expires.
+* **Every row in `verification` is keyed by a hash** (v0.10.0). The kit passes
+  `verification.storeIdentifier: 'hashed'`, so `identifier` is SHA-256
+  (base64url) of what the library would have written: the password-reset row
+  no longer holds `reset-password:<token>`, the two-factor step no longer holds
+  its cookie's value. The magic link keeps its own `storeToken: 'hashed'` from
+  v0.9.0 as well, and is hashed twice. v0.9.0 said 1.7.4 had no switch for the
+  reset row; it has, and this is it. What each table still gives whoever holds
+  a dump is in "What a dump of the login tables is worth" below.
+
+### What a dump of the login tables is worth
+
+Measured against Better Auth 1.7.4's code, not its documentation.
+
+| row | before v0.10.0 | now | with the dump **and** `secret` |
+|---|---|---|---|
+| `verification`, password reset | a working reset for every account with a letter in flight (default: 1 hour) | nothing | nothing — the secret does not invert a hash |
+| `verification`, magic link | nothing (hashed since v0.9.0) | nothing | nothing |
+| `sessions.token` | nothing | nothing | **every live session, admins' included, until it expires** (`sessionDays`) |
+
+**Why hashing the reset row is safe to turn on.** A lookup that misses by hash
+tries the identifier as given — that is how a letter sent before the bump keeps
+working, and no row has to move. The same fallback would let a stored hash,
+submitted as the identifier, find its own row. It cannot here: the reset's
+identifier carries the `reset-password:` prefix a stored hash never has, the
+two-factor rows are reached only through a signed cookie, and the magic link is
+hashed by its plugin before the library hashes it again — which is why that
+`storeToken` stays. `test/auth-wrapper.test.ts` submits a stored hash as a
+reset token and gets `INVALID_TOKEN`.
+
+**Why `sessions.token` stays as issued.** The library reads a session only from
+a cookie it signed (`getSignedCookie(…, secret)`); the routes that take a raw
+token in a body (`/revoke-session`) act only on the caller's own sessions. So
+the column alone opens nothing. The price is the other row of the table: a dump
+together with the secret — a whole-disk snapshot has both — is a login as
+anybody with a live session, and rotating `secret` is the way out (it signs
+everybody out). There is no switch for it in 1.7.4. Hashing it without one
+means an adapter wrapper that hashes `token` on write and in every `where`,
+hands the raw value back on create *and* on every read that looked one up (the
+refresh sets the cookie from the row it reads back), and still cannot give
+`listSessions` anything but hashes — auth-core's `sessions.id` in v0.9.0, but
+threaded through a library's internals, on the path every request takes. That
+is a fork in all but name, and the gain is only the last column above.
+
+**Come back to it when** a Better Auth release has an option for the session
+token (a `session.storeToken` or equivalent — look in `init-options.d.mts` on
+every bump, "Upgrading `better-auth`" below), or when the secret starts living
+somewhere a disk snapshot does not reach.
+
+### The device list does not ask for a fresh session
+
+`auth.listSessions` and `auth.revokeSession` do not go through the library's
+`/list-sessions`: in 1.7.4 that route sits behind `freshSessionMiddleware`, and a
+session older than `freshAge` (a day by default) got 403 `SESSION_NOT_FRESH`. A
+cabinet's device list worked on the day of sign-in and never after (found reading
+the library for v0.10.0). The kit resolves the session without that check and
+reads the list the way the route does. Freshness still guards what it should —
+unlinking a provider, deleting an account without a password.
+
+Refusals on the two routes the kit mounts itself are the library's own shape
+since v0.10.0: `401 { message: 'Unauthorized', code: 'UNAUTHORIZED' }`, not
+Fastify's generic body without a `code`.
 
 ### The magic link deletes passwords, and that is deliberate
 
@@ -429,6 +483,12 @@ KIT_TEST_POSTGRES_URL=postgres://…/scratch npx vitest run test/auth-postgres.t
 — and they are the only tests that can see a schema mismatch, which is how the
 plugin-field rename bug was found: `options.user.fields` does not reach a field a
 *plugin* declares, so `twoFactor` and `admin` carry their own rename.
+
+Two more things to read on a bump, both from v0.10.0: whether the new version has
+an option that hashes the session token (the reason to come back to "What a dump
+of the login tables is worth"), and whether `verification.storeIdentifier` still
+falls back to the plain identifier and the reset still carries its prefix — the
+test that submits a stored hash as a token fails if either stops being true.
 
 ### Migrations
 
@@ -489,8 +549,10 @@ those files where it can see them.
 
 **What we do:** `exo-kit-migrations sync --dir <product>/migrations/kit` copies
 them, byte for byte, into the product's tree, where the product commits them
-like any other file. This is what plan §4.3 describes, and it is the step
-`exo upgrade` will absorb.
+like any other file. This is what plan §4.3 describes. On a bump nobody runs it
+by hand any more: `exo upgrade <product>` finds every `exo-kit-migrations sync
+--dir …` in the product's scripts and runs it — then `check` — with the new
+kit.
 
 **The price, stated plainly:** there are now two copies of the login schema —
 the kit's and the product's — and a stale copy silently applies an old schema.
@@ -690,10 +752,17 @@ files was paid for by a broken build or deploy somewhere in the portfolio, and
 its comment says where: `rm -rf node_modules` before `pnpm install --prod`,
 `start_interval` only together with `start_period`, volumes that *belong* to the
 process uid rather than being group-writable. A copy that drops the comment
-keeps the line only until the next person simplifies it away. `exo new` (plan
-D2) is meant to generate from these files and `exo audit` to measure drift
-against them; the first measurement, by hand, is
+keeps the line only until the next person simplifies it away. `exo new`
+generates a product from these files, `exo upgrade` shows what changed in the
+archetype between the pinned tag and the new one, and `exo audit` measures drift
+against them (plan D2, closed 2026-09-14; the commands are `/srv/shared/bin/exo`,
+the code `/srv/shared/libexec/exo/`). The first measurement, by hand, was
 `/srv/docs/audits/2026-09-14-dockerfile-drift.md`.
+
+**Updating a product:** `exo upgrade <product>` (`--dry-run` first), then build
+and deploy the product as usual — it bumps the pin, regenerates the lock in
+Docker, re-syncs the vendored SQL, and prints this CHANGELOG for the modules the
+product imports, but neither commits nor deploys.
 
 **Proven by building, not by reading.** Each archetype was built over a stub
 application of its form the way `exo-deploy` builds (`git archive HEAD | docker
