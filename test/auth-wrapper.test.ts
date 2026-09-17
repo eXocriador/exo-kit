@@ -391,6 +391,51 @@ describe('the session list', () => {
     expect(await auth.revokeSession(headers, '00000000-0000-4000-8000-000000000000')).toBe(false);
     expect(second.status).toBe(200);
   });
+
+  it('keeps working for a session older than a day — freshness is not the bar here', async () => {
+    // Better Auth 1.7.4 puts `/list-sessions` behind `freshSessionMiddleware`:
+    // a session older than `freshAge` (a day by default) gets 403
+    // `SESSION_NOT_FRESH`. Through `auth.api.listSessions` the cabinet's device
+    // list worked on the day of sign-in and never after. Found reading the
+    // library for v0.10.0, proven here by moving `created_at` two days back.
+    const { auth, store } = built;
+    await auth.instance.api.signUpEmail({
+      body: { email: 's@example.com', password: 'a-real-password', name: 'S' },
+      asResponse: true,
+    });
+    store.users[0]!.email_verified = true;
+    const headers = cookieOf(
+      await auth.instance.api.signInEmail({
+        body: { email: 's@example.com', password: 'a-real-password' },
+        asResponse: true,
+      }),
+    );
+    await auth.instance.api.signInEmail({
+      body: { email: 's@example.com', password: 'a-real-password' },
+      asResponse: true,
+    });
+    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+    for (const row of store.sessions) row.created_at = twoDaysAgo;
+
+    // The library's own route refuses — the reason this path exists.
+    await expect(auth.instance.api.listSessions({ headers })).rejects.toMatchObject({
+      statusCode: 403,
+      body: { code: 'SESSION_NOT_FRESH' },
+    });
+
+    const sessions = await auth.listSessions(headers);
+    expect(sessions).toHaveLength(2);
+    const other = sessions.find((session) => !session.current)!;
+    expect(await auth.revokeSession(headers, other.id)).toBe(true);
+    expect(await auth.listSessions(headers)).toHaveLength(1);
+  });
+
+  it('without a session, refuses the way the library does: 401 UNAUTHORIZED', async () => {
+    const { auth } = built;
+    const refusal = { statusCode: 401, body: { code: 'UNAUTHORIZED' } };
+    await expect(auth.listSessions(new Headers())).rejects.toMatchObject(refusal);
+    await expect(auth.revokeSession(new Headers(), 'any')).rejects.toMatchObject(refusal);
+  });
 });
 
 describe('the handle auth.md keeps beside a name', () => {

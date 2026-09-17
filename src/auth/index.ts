@@ -663,9 +663,29 @@ export function createAuth<P>(o: CreateAuthOptions<P>): KitAuth<P> {
   const options = buildAuthOptions(o);
   const instance = betterAuth(options);
 
-  async function rawSessions(headers: Headers) {
-    const rows = await instance.api.listSessions({ headers });
-    return (rows ?? []) as unknown as {
+  /**
+   * The caller's live sessions, WITH tokens — for this file only.
+   *
+   * Not `instance.api.listSessions`: in 1.7.4 that route sits behind
+   * `freshSessionMiddleware`, which refuses any session older than `freshAge`
+   * (a day by default) with 403 `SESSION_NOT_FRESH`. A cabinet's device list
+   * then worked on the day of sign-in and never again. Freshness is the right
+   * bar for unlinking a provider or deleting an account — the library keeps it
+   * there — and the wrong one for "which devices am I signed in on". So the
+   * session is resolved without it and the list is read the way the library's
+   * own route reads it, from the internal adapter. Pinned in
+   * `test/auth-wrapper.test.ts`.
+   */
+  async function ownSessions(headers: Headers) {
+    const current = (await instance.api.getSession({ headers })) as {
+      session?: { id?: string; userId?: string };
+    } | null;
+    const userId = current?.session?.userId;
+    // The library's own refusal, byte for byte, so the Fastify mount forwards
+    // one shape whichever path produced it.
+    if (!userId) throw new APIError('UNAUTHORIZED', { message: 'Unauthorized', code: 'UNAUTHORIZED' });
+    const context = await instance.$context;
+    const rows = (await context.internalAdapter.listSessions(userId, { onlyActiveSessions: true })) as unknown as {
       id: string;
       token: string;
       ip?: string | null;
@@ -674,15 +694,14 @@ export function createAuth<P>(o: CreateAuthOptions<P>): KitAuth<P> {
       createdAt: Date | string;
       expiresAt: Date | string;
     }[];
+    const now = Date.now();
+    return {
+      currentId: current?.session?.id ?? null,
+      rows: rows.filter((row) => new Date(row.expiresAt).getTime() > now),
+    };
   }
 
   const iso = (value: Date | string) => new Date(value).toISOString();
-
-  async function currentSessionId(headers: Headers): Promise<string | null> {
-    const current = await instance.api.getSession({ headers });
-    const session = (current as { session?: { id?: string } } | null)?.session;
-    return session?.id ?? null;
-  }
 
   const kit: KitAuth<P> = {
     handler: (request) => instance.handler(request),
@@ -695,7 +714,7 @@ export function createAuth<P>(o: CreateAuthOptions<P>): KitAuth<P> {
     },
 
     async listSessions(headers) {
-      const [rows, currentId] = await Promise.all([rawSessions(headers), currentSessionId(headers)]);
+      const { rows, currentId } = await ownSessions(headers);
       // `token` is dropped here and nowhere else is it read out: the HTTP route
       // that would have carried it is in `disabledPaths`.
       return rows.map((row) => ({
@@ -712,7 +731,7 @@ export function createAuth<P>(o: CreateAuthOptions<P>): KitAuth<P> {
       // By id, because the cabinet never saw a token. The list is already
       // scoped to the caller, so looking the token up in it is the whole
       // authorization check: an id belonging to somebody else is simply absent.
-      const rows = await rawSessions(headers);
+      const { rows } = await ownSessions(headers);
       const match = rows.find((row) => row.id === sessionId);
       if (!match) return false;
       await instance.api.revokeSession({ headers, body: { token: match.token } });

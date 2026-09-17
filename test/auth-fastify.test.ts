@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { APIError } from 'better-auth';
 import { createAuthFastifyPlugin } from '../src/auth/fastify.js';
 
 /**
@@ -130,6 +131,54 @@ describe('the Fastify mount', () => {
     const garbage = fakeReply();
     await handler({ method: 'POST', url: '/x', headers: {}, body: 'not json' }, garbage.reply);
     expect(garbage.state.status).toBe(400);
+  });
+
+  it('answers a refusal the library threw with its code, on both routes', async () => {
+    // D1 found it live: `auth.api.*` THROWS, and Fastify's generic handler
+    // turned that into `{ statusCode: 401, error: 'Unauthorized' }` with no
+    // `code`, while every library route beside them says `{ message, code }`.
+    const unauthorized = () => {
+      throw new APIError('UNAUTHORIZED', { message: 'Unauthorized', code: 'UNAUTHORIZED' });
+    };
+    const { instance, recorded } = recordingInstance();
+    await plugin({ listSessions: async () => unauthorized(), revokeSession: async () => unauthorized() })(
+      instance as never,
+    );
+
+    const list = fakeReply();
+    await recorded.handlers.get('/api/account/list-sessions')!(
+      { method: 'GET', url: '/api/account/list-sessions', headers: {} },
+      list.reply,
+    );
+    expect(list.state.status).toBe(401);
+    expect(list.state.payload).toEqual({ message: 'Unauthorized', code: 'UNAUTHORIZED' });
+
+    const revoke = fakeReply();
+    await recorded.handlers.get('/api/account/revoke-session')!(
+      { method: 'POST', url: '/api/account/revoke-session', headers: {}, body: '{"id":"abc"}' },
+      revoke.reply,
+    );
+    expect(revoke.state.status).toBe(401);
+    expect(revoke.state.payload).toEqual({ message: 'Unauthorized', code: 'UNAUTHORIZED' });
+  });
+
+  it('leaves anything that is not a 4xx refusal to Fastify', async () => {
+    // A dead database is a 500 somebody must see in the error reporter, not a
+    // polite body with a made-up code.
+    const { instance, recorded } = recordingInstance();
+    await plugin({
+      listSessions: async () => {
+        throw new Error('connection refused');
+      },
+    })(instance as never);
+    const { reply, state } = fakeReply();
+    await expect(
+      recorded.handlers.get('/api/account/list-sessions')!(
+        { method: 'GET', url: '/api/account/list-sessions', headers: {} },
+        reply,
+      ),
+    ).rejects.toThrow('connection refused');
+    expect(state.status).toBe(0);
   });
 
   it('passes every Set-Cookie through separately', async () => {
