@@ -269,7 +269,24 @@ export function buildAuthOptions(o) {
                 login: { type: 'string', required: false, input: false },
             },
         },
-        verification: { modelName: MODEL_NAMES.verification, fields: VERIFICATION_FIELDS },
+        verification: {
+            modelName: MODEL_NAMES.verification,
+            fields: VERIFICATION_FIELDS,
+            // Fixed, not a parameter (v0.10.0). Every identifier is stored as SHA-256 (base64url),
+            // and every lookup hashes what it was handed. Before this a dump of
+            // `verification` held `reset-password:<token>` as issued — a working
+            // password reset for every account with a letter in flight.
+            //
+            // The option has one edge that decides everything around it: a lookup
+            // that misses by hash tries the identifier AS GIVEN (that is how rows
+            // written before the bump keep working). So a stored hash submitted as
+            // an identifier would match its own row. It cannot, for what this module
+            // uses: `reset-password:` carries a prefix a stored hash never has, the
+            // two-factor rows are keyed by a signed cookie, and the magic link keeps
+            // its own `storeToken: 'hashed'` above — drop that, and the letter's
+            // token becomes the row's identifier and the dump a list of links again.
+            storeIdentifier: 'hashed',
+        },
         emailAndPassword: passwordOn
             ? {
                 enabled: true,
@@ -399,16 +416,35 @@ export function buildAuthOptions(o) {
 export function createAuth(o) {
     const options = buildAuthOptions(o);
     const instance = betterAuth(options);
-    async function rawSessions(headers) {
-        const rows = await instance.api.listSessions({ headers });
-        return (rows ?? []);
+    /**
+     * The caller's live sessions, WITH tokens — for this file only.
+     *
+     * Not `instance.api.listSessions`: in 1.7.4 that route sits behind
+     * `freshSessionMiddleware`, which refuses any session older than `freshAge`
+     * (a day by default) with 403 `SESSION_NOT_FRESH`. A cabinet's device list
+     * then worked on the day of sign-in and never again. Freshness is the right
+     * bar for unlinking a provider or deleting an account — the library keeps it
+     * there — and the wrong one for "which devices am I signed in on". So the
+     * session is resolved without it and the list is read the way the library's
+     * own route reads it, from the internal adapter. Pinned in
+     * `test/auth-wrapper.test.ts`.
+     */
+    async function ownSessions(headers) {
+        const current = (await instance.api.getSession({ headers }));
+        const userId = current?.session?.userId;
+        // The library's own refusal, byte for byte, so the Fastify mount forwards
+        // one shape whichever path produced it.
+        if (!userId)
+            throw new APIError('UNAUTHORIZED', { message: 'Unauthorized', code: 'UNAUTHORIZED' });
+        const context = await instance.$context;
+        const rows = (await context.internalAdapter.listSessions(userId, { onlyActiveSessions: true }));
+        const now = Date.now();
+        return {
+            currentId: current?.session?.id ?? null,
+            rows: rows.filter((row) => new Date(row.expiresAt).getTime() > now),
+        };
     }
     const iso = (value) => new Date(value).toISOString();
-    async function currentSessionId(headers) {
-        const current = await instance.api.getSession({ headers });
-        const session = current?.session;
-        return session?.id ?? null;
-    }
     const kit = {
         handler: (request) => instance.handler(request),
         // Replaced just below, once the three functions it closes over exist.
@@ -418,7 +454,7 @@ export function createAuth(o) {
             return (result?.principal ?? null);
         },
         async listSessions(headers) {
-            const [rows, currentId] = await Promise.all([rawSessions(headers), currentSessionId(headers)]);
+            const { rows, currentId } = await ownSessions(headers);
             // `token` is dropped here and nowhere else is it read out: the HTTP route
             // that would have carried it is in `disabledPaths`.
             return rows.map((row) => ({
@@ -434,7 +470,7 @@ export function createAuth(o) {
             // By id, because the cabinet never saw a token. The list is already
             // scoped to the caller, so looking the token up in it is the whole
             // authorization check: an id belonging to somebody else is simply absent.
-            const rows = await rawSessions(headers);
+            const { rows } = await ownSessions(headers);
             const match = rows.find((row) => row.id === sessionId);
             if (!match)
                 return false;

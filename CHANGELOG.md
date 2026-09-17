@@ -3,6 +3,82 @@
 Semantic versioning. One tag covers the whole kit; the sections below are per
 module, so a consumer can see whether a release touches anything it imports.
 
+## v0.10.0 — 2026-09-17
+
+**Minor, not patch: `llm` loses its chat half**, and in 0.x a removal is a minor.
+Nothing else here breaks a caller. Tests: 483 in v0.9.0 and v0.9.2 → **467**
+(−25 with the chat, +9 new) and 9 skipped without `KIT_TEST_POSTGRES_URL`; the
+Postgres suite (9) was run against a throwaway Postgres 16 for this release.
+
+### llm
+
+**BREAKING: chat moved to `@exo/kit/ai` (v0.8.0); the last consumer left on
+2026-09-14.** Removed: `createLlm`, `Llm`, `LlmConfig`, `resolveProviderName`,
+`flattenConversation`, the Ollama, Anthropic, OpenAI and VibeConduit providers
+(`createOllamaProvider`, `createAnthropicProvider`, `createOpenAiProvider`,
+`createVibeConduitProvider` and their configs), and the types `ChatMessage`,
+`ChatProvider`, `GenerateOptions`, `ProviderName`, `ProviderHooks` — from the
+subpath and, for the types, from the root entry. Kept: `createEmbedder` and
+`EmbedderConfig`, now the whole module; the root re-exports `EmbedderConfig`.
+`test/entry-graph.test.ts`: the entry reaches no package at all (it used to
+promise only "no database driver"), and nothing named `createLlm` or under
+`providers/` comes back.
+
+The only importer across `products/*` on 2026-09-17 was exointel, and only
+`createEmbedder` (`apps/web/src/lib/llm/client.ts`) — **exointel needs no code
+change for this entry**, and no other product imports `@exo/kit/llm`. exo-ai
+names the module only in comments. `KitComponent` keeps `'llm'`: removing a
+union member would break a product's exhaustive `switch` for no gain.
+
+### auth
+
+**Every `verification` identifier is stored hashed.** `verification:
+{ storeIdentifier: 'hashed' }`, fixed rather than a parameter. The password-reset
+row no longer holds `reset-password:<token>` — v0.9.0 said Better Auth 1.7.4 had
+no switch for it; it has, in `@better-auth/core`'s options. No rows are moved:
+the library's lookup falls back to the plain identifier, so a reset letter sent
+before this release still works (a test holds that too). The same fallback is
+why the magic link keeps `storeToken: 'hashed'` and is now hashed twice, and why
+a stored hash submitted as a reset token is refused — tested, with the reasoning
+in README, "What a dump of the login tables is worth". Also proven over a
+two-factor sign-in (its pending row is keyed by a signed cookie), which no test
+walked before.
+
+**`sessions.token` stays as issued — measured, not patched.** The library reads
+a session only from a cookie it signed with `secret`, so the column alone opens
+nothing; with the secret as well it is a login as every live session. 1.7.4 has
+no option, and hashing it through an adapter wrapper is a fork in all but name.
+README has the price and when to come back.
+
+**The device list works for a session older than a day.** Found while reading
+the library for the entry above, not requested: `auth.listSessions` and
+`auth.revokeSession` called `instance.api.listSessions`, which in 1.7.4 is
+behind `freshSessionMiddleware` — 403 `SESSION_NOT_FRESH` once a session is
+older than `freshAge` (default one day). A cabinet's devices page worked on the
+day of sign-in and failed after. They now resolve the session without the
+freshness check and read the list through the internal adapter, as the route
+does. Compatible: same return values, and with no session both still throw the
+library's `APIError` 401 `UNAUTHORIZED`. Proven over the memory adapter and over
+Postgres.
+
+**`code` in the 401 from `/list-sessions` and `/revoke-session`** (§10, block
+«D1», request to the kit). The Fastify mount catches the library's refusal and
+answers it in the library's own shape, `{ message, code }` — 401 `{ code:
+'UNAUTHORIZED' }` — instead of Fastify's generic body with no `code`. The
+library's code rather than a kit name: `refusalCode` in `@exo/kit-ui` already
+maps `UNAUTHORIZED` to `no-session`, and the routes beside these two already say
+it; a third name for one state buys nothing. kit-ui's "401 without a code"
+fallback stays harmless. Only a 4xx with a string code is forwarded; anything
+else is still Fastify's to report.
+
+### docs
+
+README: "Models" — `llm` is embeddings only, with a pointer to `ai`; "The login"
+— the dump table, the device list, what to read on a `better-auth` bump;
+"Templates" and "Migrations" — D2 is closed, `exo new|upgrade|audit` live in
+`/srv/shared/bin/exo`, `exo upgrade` runs `exo-kit-migrations sync` itself, and
+one line on how a product is updated.
+
 ## v0.9.2 — 2026-09-14
 
 Templates only. No module changed; a consumer's bump does nothing.

@@ -27,6 +27,34 @@ function jsonBody(body) {
         return {};
     }
 }
+/**
+ * A refusal the library threw, answered in the library's own shape.
+ *
+ * `listSessions` and `revokeSession` go through `auth.api.*`, which THROWS an
+ * `APIError` where the HTTP route would have answered. Left to Fastify's error
+ * handler that became `{ statusCode: 401, error: 'Unauthorized' }` — no `code`
+ * — while every other route under `basePath` says `{ message, code }`. kit-ui
+ * had to read "401 without a code" as `no-session` (D1, 2026-09-14). The code
+ * sent is the library's (`UNAUTHORIZED`), not a kit name: a product's client
+ * already maps that one, and a third dialect for the same state buys nothing.
+ *
+ * Recognised structurally, like everything else in this file — no import from
+ * the library. Only a 4xx with a string code is forwarded; anything else is a
+ * real failure and stays Fastify's to report.
+ */
+function libraryRefusal(error) {
+    if (typeof error !== 'object' || error === null)
+        return null;
+    const { statusCode, body } = error;
+    if (typeof statusCode !== 'number' || statusCode < 400 || statusCode > 499)
+        return null;
+    if (typeof body !== 'object' || body === null)
+        return null;
+    const { code, message } = body;
+    if (typeof code !== 'string' || code === '')
+        return null;
+    return { status: statusCode, body: { message: typeof message === 'string' ? message : code, code } };
+}
 export function createAuthFastifyPlugin(config) {
     const { basePath, baseUrl } = config;
     return async function authPlugin(app) {
@@ -46,8 +74,16 @@ export function createAuthFastifyPlugin(config) {
             method: ['GET'],
             url: `${basePath}/list-sessions`,
             handler: async (request, reply) => {
-                const sessions = await config.listSessions(toHeaders(request.headers));
-                return reply.code(200).send({ sessions });
+                try {
+                    const sessions = await config.listSessions(toHeaders(request.headers));
+                    return reply.code(200).send({ sessions });
+                }
+                catch (error) {
+                    const refusal = libraryRefusal(error);
+                    if (!refusal)
+                        throw error;
+                    return reply.code(refusal.status).send(refusal.body);
+                }
             },
         });
         app.route({
@@ -58,7 +94,16 @@ export function createAuthFastifyPlugin(config) {
                 const id = typeof body.id === 'string' ? body.id : '';
                 if (!id)
                     return reply.code(400).send({ message: 'id is required', code: 'BAD_REQUEST' });
-                const revoked = await config.revokeSession(toHeaders(request.headers), id);
+                let revoked;
+                try {
+                    revoked = await config.revokeSession(toHeaders(request.headers), id);
+                }
+                catch (error) {
+                    const refusal = libraryRefusal(error);
+                    if (!refusal)
+                        throw error;
+                    return reply.code(refusal.status).send(refusal.body);
+                }
                 // Somebody else's session and a session that never existed answer the
                 // same: a 403 would confirm that the id is real.
                 if (!revoked)

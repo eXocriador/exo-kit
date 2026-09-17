@@ -26,8 +26,8 @@ export interface AiClientConfig {
      * Ceiling on one `complete()` when the call names none. Default 60 s.
      *
      * This is the bound on the WHOLE ladder, not on one model — the service has
-     * its own timeout per model and may try several. `@exo/kit/llm` fixed one
-     * 30 s for every call, which made a long reasoning call indistinguishable
+     * its own timeout per model and may try several. The old `@exo/kit/llm` chat
+     * fixed one 30 s for every call, which made a long reasoning call indistinguishable
      * from a dead one; so set it per call, from what is waiting on the answer.
      */
     timeoutMs?: number;

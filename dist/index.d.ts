@@ -15,7 +15,7 @@
 export type { Db, DbConfig, DbOutcome, RedisCache, RedisConfig, ErrorContext, ReportError } from './infra/index.js';
 export type { JsonRecord } from './json/index.js';
 export type { KitLogger, LoggerConfig, OpenObserveConfig, AuditRecord, LogFields } from './log/index.js';
-export type { Llm, LlmConfig, ChatMessage, ChatProvider, GenerateOptions, ProviderName } from './llm/index.js';
+export type { EmbedderConfig } from './llm/index.js';
 export type { AiClient, AiClientConfig, AiTier, AiMessage, AiAttempt, AiAnswer, AiRefusal, CompleteRequest, CompleteResult, UsageResult, } from './ai/index.js';
 export type { ApiResponse, ApiResponseConfig, ApiOkOptions, RateLimiter, RateLimiterConfig, RateLimitRule, RateLimitRedis, ClientIp, ClientIpConfig, ValidationResult, } from './http/index.js';
 export type { AuthTokens, AuthTokensConfig, SessionStore, SessionStoreConfig, SessionCache, SessionInfo, SessionMeta, } from './auth-core/index.js';

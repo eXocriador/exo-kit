@@ -1,83 +1,40 @@
-import { createOllamaProvider, createEmbedder } from './providers/ollama.js';
-import { createAnthropicProvider } from './providers/anthropic.js';
-import { createOpenAiProvider } from './providers/openai.js';
-import { createVibeConduitProvider } from './providers/vibeconduit.js';
-export { createOllamaProvider, createEmbedder, createAnthropicProvider, createOpenAiProvider, createVibeConduitProvider, };
 /**
- * Resolve a provider name that arrived as free text (an environment variable,
- * a config file) — throwing on anything unrecognised.
+ * `@exo/kit/llm` — embeddings, and nothing else since v0.10.0.
  *
- * Failing loud at boot beats falling back to a default: a misconfigured name
- * would otherwise have `isAvailable()` report some *other* backend's liveness,
- * so callers never take the graceful AI-offline path even though the intended
- * provider is down. `aliases` exists for deployments carrying a legacy value
- * they cannot rename in one step.
+ * Chat lived here until the exo-ai service took it over: `@exo/kit/ai` (v0.8.0)
+ * asks the service for a tier, and the service owns providers, fallbacks,
+ * timeouts and budgets. exointel moved last, on 2026-09-14, and v0.10.0 removed
+ * `createLlm` and its four providers. What is left is the one thing the service
+ * deliberately does not do.
  */
-export function resolveProviderName(raw, opts = {}) {
-    const value = raw?.trim().toLowerCase();
-    if (!value) {
-        if (opts.fallback)
-            return opts.fallback;
-        throw new Error('[llm] no provider name given and no fallback configured');
-    }
-    const alias = opts.aliases?.[value];
-    if (alias)
-        return alias;
-    if (value === 'ollama' || value === 'anthropic' || value === 'openai' || value === 'vibeconduit') {
-        return value;
-    }
-    throw new Error(`[llm] unrecognized provider "${value}" — must be one of: ollama, anthropic, openai, vibeconduit`);
-}
+import { asArray, getPath } from '../json/index.js';
 /**
- * Collapse a conversation into one labelled prompt, for a provider that has no
- * native multi-turn call. Exported because it is the fallback that keeps a
- * third-party provider usable at all, and a fallback nothing exercises is a
- * fallback nobody knows is broken.
- *
- * System turns keep no label: they are instructions, not a speaker's line, and
- * prefixing them with a name makes the model treat them as dialogue.
+ * Embeddings via Ollama. Not a tier of the model service, on purpose: a stored
+ * vector collection is tied to the dimensions of the model that wrote it, so a
+ * service free to fall back to another model would silently make every stored
+ * vector unsearchable. The model is pinned here, by the product that owns the
+ * collection. Returns `null` when unavailable; never throws.
  */
-export function flattenConversation(messages) {
-    return messages
-        .map((m) => m.role === 'system'
-        ? m.content
-        : `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-        .join('\n\n');
-}
-function build(config) {
-    switch (config.provider) {
-        case 'ollama':
-            return createOllamaProvider(config);
-        case 'anthropic':
-            return createAnthropicProvider(config);
-        case 'openai':
-            return createOpenAiProvider(config);
-        case 'vibeconduit':
-            return createVibeConduitProvider(config);
-    }
-}
-export function createLlm(config) {
-    const provider = build(config);
-    return {
-        provider,
-        providerName: provider.name,
-        activeModel: provider.defaultModel,
-        generate(prompt, opts) {
-            return provider.generate(prompt, opts);
-        },
-        /**
-         * Uses the provider's native `chat` when it has one (real conversational
-         * context), otherwise flattens the conversation into a single labelled
-         * prompt for `generate` so every provider still works.
-         */
-        chat(messages, opts) {
-            if (provider.chat)
-                return provider.chat(messages, opts);
-            return provider.generate(flattenConversation(messages), opts);
-        },
-        isAvailable() {
-            return provider.isAvailable();
-        },
+export function createEmbedder(config) {
+    const base = config.url ?? 'http://localhost:11434';
+    const doFetch = config.fetchImpl ?? ((...a) => globalThis.fetch(...a));
+    return async function embed(text, model = config.model) {
+        try {
+            const res = await doFetch(`${base}/api/embeddings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model, prompt: text }),
+                signal: AbortSignal.timeout(config.timeoutMs ?? 15_000),
+            });
+            if (!res.ok)
+                return null;
+            const data = await res.json();
+            const embedding = asArray(getPath(data, 'embedding')).filter((v) => typeof v === 'number');
+            return embedding.length ? embedding : null;
+        }
+        catch {
+            return null;
+        }
     };
 }
 //# sourceMappingURL=index.js.map
